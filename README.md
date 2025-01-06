@@ -14,7 +14,7 @@ linux：export needle_pwd="your_pwd"
 IDE配置：Configuration->Enviroment->Environment variables中添加needle_pwd=your_pwd
 ```
 
-The app will be running on http://0.0.0.0:8471
+The app will be running on http://0.0.0.0:8401
 ```sh
 python main.py
 ```
