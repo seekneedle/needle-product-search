@@ -1,0 +1,26 @@
+log_level: info
+
+ip: 0.0.0.0
+port: 8405
+
+username: needle_product_search
+password: f24f9f99b2081587d648d8cba8bb4d1104a38acc34d54f0bc9b5943338aaedfc
+
+origins:
+  - http://localhost
+  - http://localhost:8080
+  - http://185.199.110.153
+  - http://185.199.110.153:8080
+  - https://seekneedle.github.io
+
+ak: d721d9bb854dcb77a0df4c182de19445bd1d9baf81bbec80aa7ba2d5b4a6ac2bfb4589b5b615d5a4293fc4beb4490472
+sk: 4a865afb353caa5a82fe5ed8057c4b61dc60dfa2b5ff7dc7d97957b4e2436959961ac0f545bd0bde82a8517e2543fbdf
+api_key: 040e4d0f21217158dbaa0d892ccc67a5a82fa0444502902d4b9ad851171f4bf106b29476349ae366958fd30dada6b06b2e3b016c69b7753d4d23c8ec30dd3ace
+workspace_id: llm-y0ovfrk078g0qeib
+parent_category_id: cate_8b810173168b460180bb2b4e1c42e906_10224804
+
+workflow_id: 7454405767978926091
+
+filestore_root_dir: output
+
+db_url: sqlite:///res/prod/example.db

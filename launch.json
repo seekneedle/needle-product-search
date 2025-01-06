@@ -1,0 +1,16 @@
+{
+    "version": "1.0.0",
+    "configurations": [
+        {
+            "name": "Python: main.py",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",  // 指定具体文件
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONUNBUFFERED": "1",
+                "rl_pwd": your_password
+            }
+        }
+    ]
+}

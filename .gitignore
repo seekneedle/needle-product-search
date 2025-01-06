@@ -1,0 +1,9 @@
+.idea
+output
+temp
+__pycache__/
+*.pyc
+res/example.db
+res/prod/example.db
+res/uat/example.db
+.ipynb_checkpoints
