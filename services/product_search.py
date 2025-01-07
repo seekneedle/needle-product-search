@@ -3,6 +3,8 @@ from pydantic import BaseModel
 import requests
 from typing import List
 import json
+from utils.config import config
+from utils.security import decrypt
 
 
 class ProductSearchRequest(BaseModel):
@@ -23,13 +25,13 @@ class RequestError(Exception):
 
 
 def product_search(request: ProductSearchRequest):
-    url = 'https://api.coze.cn/v1/workflow/run'
+    url = config['coze_api_url']
     headers = {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer pat_w9Ix9RRMfMjmN4ZTIXFIXJ0qL6yBQW2hDG0rsYelpr6fv9dLpCzYtZfZfKLB2pww'
+        'Authorization': decrypt(config['coze_api_auth'])
     }
     data = {
-        "workflow_id": "7454405767978926091",
+        "workflow_id": decrypt(config['coze_product_search_wf_id']),
         "parameters": {
             "messages": request.messages
         }

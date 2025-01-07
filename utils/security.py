@@ -59,16 +59,16 @@ if __name__ == '__main__':
         password = ''.join(random.choice(chars) for _ in range(length))
         return password
 
-
-    # 生成一个长度为16的随机密码
-    random_password = generate_password()
-    # print("Generated password:", random_password)
     #
-    # cipher_text = encrypt('needle_product_search', random_password)  # Replace it with the text you need to encrypt
-    # print(cipher_text)
-    # plain_text = decrypt(cipher_text)
-    # print(plain_text)
+    # # 生成一个长度为16的随机密码
+    random_password = generate_password()
+    print("Generated password:", random_password)
+    #
+    cipher_text = encrypt('sss')  # Replace it with the text you need to encrypt
+    print(cipher_text)
 
-    # hash_value = sha256_encode("u^rk*uLxmQ7yBMJc")
+    plain_text = decrypt(cipher_text)
+    print(plain_text)
+
     hash_value = sha256_encode("needle_product_search")# Replace it with the text you need to encode
     print(hash_value)
