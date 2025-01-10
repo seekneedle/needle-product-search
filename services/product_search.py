@@ -15,7 +15,7 @@ class ProductSearchRequest(BaseModel):
 
 class ProductSearchResponse(BaseModel):
     content: str
-    product_details: List[str]
+    product_details: List[object]
     product_features: List[str]
 
 
