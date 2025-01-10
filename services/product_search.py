@@ -14,7 +14,9 @@ class ProductSearchRequest(BaseModel):
 
 
 class ProductSearchResponse(BaseModel):
-    product_ids: List[str]
+    content: str
+    product_details: List[str]
+    product_features: List[str]
 
 
 class RequestError(Exception):
