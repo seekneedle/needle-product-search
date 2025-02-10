@@ -1,10 +1,10 @@
 log_level: info
 
 ip: 0.0.0.0
-port: 8401
+port: 8405
 
-username: needle
-password: f78bfabb43387f9e065ebec4eedc52fa353f7740fa49402fb7e0240915bb3ed7
+username: needle_product_search
+password: f24f9f99b2081587d648d8cba8bb4d1104a38acc34d54f0bc9b5943338aaedfc
 
 origins:
   - http://localhost
@@ -17,11 +17,12 @@ ak: d721d9bb854dcb77a0df4c182de19445bd1d9baf81bbec80aa7ba2d5b4a6ac2bfb4589b5b615
 sk: 4a865afb353caa5a82fe5ed8057c4b61dc60dfa2b5ff7dc7d97957b4e2436959961ac0f545bd0bde82a8517e2543fbdf
 api_key: 040e4d0f21217158dbaa0d892ccc67a5a82fa0444502902d4b9ad851171f4bf106b29476349ae366958fd30dada6b06b2e3b016c69b7753d4d23c8ec30dd3ace
 workspace_id: llm-y0ovfrk078g0qeib
-parent_category_id: cate_293ef56ed8c243e4b8b5e10d894aa59f_10224804
+parent_category_id: cate_8b810173168b460180bb2b4e1c42e906_10224804
 
 coze_api_url: https://api.coze.cn/v1/workflow/run
 coze_api_auth: 09e4ad622cb1c10cff42ef361994b5251417595dc375b1ac86bc661a5e1c8a988d0fab0aaef617fd8a19223c0366c7aa645247fc2de7a33ed4ea3489b3c0824a8346174a81e4e44624cdf02e5d854095f03d2cc0bec7dea29ac40f24dafa1f1d
-coze_product_search_wf_id: 27bc3eb4c6c668752a841e086804c3856c9b754c3afe8e69b62529ea48b223f7590b5276d08c42a0f90bc7d0f6820890
+coze_product_search_wf_id: 7454405767978926091
+coze_product_compare_wf_id: 7454405767978926091
 
 filestore_root_dir: output
 

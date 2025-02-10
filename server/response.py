@@ -16,3 +16,9 @@ class FailResponse(BaseModel):
     code: int = 400
     status: str = 'fail'
     error: str
+
+class RequestError(Exception):
+    """自定义异常类，用于处理请求错误"""
+    def __init__(self, status_code, message):
+        super().__init__(message)
+        self.status_code = status_code

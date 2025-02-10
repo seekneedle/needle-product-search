@@ -1,4 +1,3 @@
-
 from pydantic import BaseModel
 import requests
 from typing import List
@@ -8,27 +7,25 @@ from utils.security import decrypt
 from server.response import RequestError
 
 
-class ProductSearchRequest(BaseModel):
+class ProductCompareRequest(BaseModel):
+    ids: List[str]
     messages: List[object]
-    class Config:
-        arbitrary_types_allowed = True
 
 
-class ProductSearchResponse(BaseModel):
-    content: str
-    product_details: List[object]
-    product_features: List[str]
+class ProductCompareResponse(BaseModel):
+    result: List[object]
 
 
-def product_search(request: ProductSearchRequest):
+def product_compare(request: ProductCompareRequest):
     url = config['coze_api_url']
     headers = {
         'Content-Type': 'application/json',
         'Authorization': decrypt(config['coze_api_auth'])
     }
     data = {
-        "workflow_id": config['coze_product_search_wf_id'],
+        "workflow_id": config['coze_product_compare_wf_id'],
         "parameters": {
+            "ids": request.ids,
             "messages": request.messages
         }
     }

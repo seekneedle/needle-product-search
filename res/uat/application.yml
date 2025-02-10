@@ -21,8 +21,9 @@ parent_category_id: cate_8b810173168b460180bb2b4e1c42e906_10224804
 
 coze_api_url: https://api.coze.cn/v1/workflow/run
 coze_api_auth: 09e4ad622cb1c10cff42ef361994b5251417595dc375b1ac86bc661a5e1c8a988d0fab0aaef617fd8a19223c0366c7aa645247fc2de7a33ed4ea3489b3c0824a8346174a81e4e44624cdf02e5d854095f03d2cc0bec7dea29ac40f24dafa1f1d
-coze_product_search_wf_id: 27bc3eb4c6c668752a841e086804c3856c9b754c3afe8e69b62529ea48b223f7590b5276d08c42a0f90bc7d0f6820890
+coze_product_search_wf_id: 7454405767978926091
+coze_product_compare_wf_id: 7462301883848704027
 
 filestore_root_dir: output
 
-db_url: sqlite:///res/prod/example.db
+db_url: sqlite:///res/uat/example.db
