@@ -5,9 +5,9 @@ import json
 from utils.config import config
 from utils.security import decrypt
 from utils.log import log
-from server.response import RequestError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import traceback
+from openai import OpenAI
 
 class ProductUpdateResponse(BaseModel):
     results: List[str]
@@ -49,18 +49,16 @@ def get_product_pages():
     return 0
 
 
-def get_page_product_nums(current):
+def get_page_product_ids(current):
     uux_url = config['uux_url']
     url = f'https://{uux_url}/mcsp/productAi/page'
-    product_nums = []
     product_ids = []
     data = requests.get(url, params={'current': current}).json()['data']
     if data is not None and 'records' in data.keys() and data['records'] is not None:
         for record in data['records']:
-            if record['productNum'] not in product_nums:
-                product_nums.append(record['productNum'])
+            if record['productId'] not in product_ids:
                 product_ids.append(record['productId'])
-    return product_nums, product_ids
+    return product_ids
 
 def get_product_detail(product_id):
     uux_url = config['uux_url']
@@ -73,20 +71,62 @@ def get_product_detail(product_id):
 def process_page(current):
     id = config['kb_id']
 
-    product_nums, product_ids = get_page_product_nums(current)
+    try:
+        product_ids = get_page_product_ids(current)
+    except Exception as e:
+        print(e)
+
     files = []
     result = ''
 
-    for product_num, product_id in zip(product_nums, product_ids):
-        try:
-            product_detail = get_product_detail(product_id)
-            if product_detail is None or product_detail == '':
-                raise RuntimeError('detail empty')
-            file_content = product_detail
-            file_name = product_num + ".txt"
-            files.append(('files', (file_name, file_content.encode('utf-8'))))
-        except Exception as exc:
-            result += f'{current}/{product_num}/{exc};'
+    for product_id in product_ids:
+        retrys = 0
+        while retrys < 3:
+            try:
+                product_detail = get_product_detail(product_id)[:3000]
+                if product_detail is None or product_detail == '':
+                    raise RuntimeError('detail empty')
+                client = OpenAI(
+                    api_key=decrypt(config['api_key']),
+                    base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
+                )
+                prompt = f'''# 角色
+    你是一个专业的旅行产品分析员，能够准确地从旅行产品详情中提取出产品特点。
+    
+    ## 技能
+    ### 技能 1: 分析旅行产品特点
+    1. 仔细阅读旅行产品详情。
+    2. 根据产品详情，分析并总结出该产品的特点，如适合的人群（年纪较大、小孩儿童、蜜月旅行等）、价格特点（适合要求价格低的客户）、游玩地点特点（适合想在草原玩的客户）、活动类型特点（适合想要参加夏令营的客户等）、是否属于比较轻松的产品（比如每天前往的景点较少，或者基本都有交通工具）。
+    ===回复示例===
+       - 特点描述：<产品特点的具体描述>
+       - 理由：<说明该特点的依据，从产品详情中提取>
+    ===示例结束===
+    
+    ## 产品详情
+    {product_detail}
+    
+    ## 限制:
+    - 只分析旅行产品相关内容，拒绝回答与旅行产品无关的话题。
+    - 所输出的内容必须按照给定的格式进行组织，不能偏离框架要求。'''
+                messages = [
+                    {
+                        'role': 'user',
+                        'content': prompt
+                    }
+                ]
+                completion = client.chat.completions.create(
+                    model="qwen-plus-2024-09-19",
+                    messages=messages,
+                    temperature=0.5
+                )
+                query_content = completion.choices[0].message.content
+                file_content = query_content
+                file_name = product_id + ".txt"
+                files.append(('files', (file_name, file_content.encode('utf-8'))))
+                break
+            except Exception as exc:
+                result += f'retry:{retrys}/{current}/{product_id}/{exc};'
+                retrys += 1
 
     needle_url = config['needle_url']
     url = f"{needle_url}/vector_store/file/add"

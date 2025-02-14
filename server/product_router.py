@@ -44,5 +44,5 @@ async def product_update_api():
         return SuccessResponse(data=product_update_response)
     except Exception as e:
         trace_info = traceback.format_exc()
-        log.error(f'Exception for /product/update, request: {request}, e: {e}, trace: {trace_info}')
+        log.error(f'Exception for /product/update, e: {e}, trace: {trace_info}')
         return FailResponse(error=str(e))
