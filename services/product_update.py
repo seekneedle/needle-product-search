@@ -7,7 +7,7 @@ from utils.security import decrypt
 from utils.log import log
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import traceback
-from openai import OpenAI
+from server.response import RequestError
 
 class ProductUpdateResponse(BaseModel):
     results: List[str]
@@ -49,22 +49,40 @@ def get_product_pages():
     return 0
 
 
-def get_page_product_ids(current):
+def get_page_product_nums(current):
     uux_url = config['uux_url']
     url = f'https://{uux_url}/mcsp/productAi/page'
-    product_ids = []
+    product_nums = []
     data = requests.get(url, params={'current': current}).json()['data']
     if data is not None and 'records' in data.keys() and data['records'] is not None:
         for record in data['records']:
-            if record['productId'] not in product_ids:
-                product_ids.append(record['productId'])
-    return product_ids
+            if record['productNum'] not in product_nums:
+                product_nums.append(record['productNum'])
+    return product_nums
 
-def get_product_detail(product_id):
-    uux_url = config['uux_url']
-    url = f'https://{uux_url}/mcsp/productAi/productInfo?productId={product_id}'
-    response = requests.get(url).json()['data']
-    product_detail = json.dumps(response, ensure_ascii=False)
+def get_product_feature(product_num):
+    url = config['coze_api_url']
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': decrypt(config['coze_api_auth'])
+    }
+    data = {
+        "workflow_id": config['coze_product_feature_wf_id'],
+        "parameters": {
+            "product_num": product_num,
+            "env": config['env']
+        }
+    }
+    response = requests.post(url, headers=headers, json=data)
+    product_detail = ''
+    if response.status_code == 200:
+        response_data = response.json()
+        input_data = response_data["data"]
+        try:
+            parsed_data = json.loads(input_data)
+            product_detail = parsed_data['product_feature']
+        except json.JSONDecodeError:
+            raise RequestError(response.status_code, f"解析失败: {response.status_code}, 响应内容: {response.text}")
     return product_detail
 
 
@@ -72,60 +90,26 @@ def process_page(current):
     id = config['kb_id']
 
     try:
-        product_ids = get_page_product_ids(current)
+        product_nums = get_page_product_nums(current)
     except Exception as e:
         print(e)
 
     files = []
     result = ''
 
-    for product_id in product_ids:
+    for product_num in product_nums:
         retrys = 0
         while retrys < 3:
             try:
-                product_detail = get_product_detail(product_id)[:3000]
-                if product_detail is None or product_detail == '':
+                product_feature = get_product_feature(product_num)
+                if product_feature is None or product_feature == '':
                     raise RuntimeError('detail empty')
-                client = OpenAI(
-                    api_key=decrypt(config['api_key']),
-                    base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
-                )
-                prompt = f'''# 角色
-    你是一个专业的旅行产品分析员，能够准确地从旅行产品详情中提取出产品特点。
-    
-    ## 技能
-    ### 技能 1: 分析旅行产品特点
-    1. 仔细阅读旅行产品详情。
-    2. 根据产品详情，分析并总结出该产品的特点，如适合的人群（年纪较大、小孩儿童、蜜月旅行等）、价格特点（适合要求价格低的客户）、游玩地点特点（适合想在草原玩的客户）、活动类型特点（适合想要参加夏令营的客户等）、是否属于比较轻松的产品（比如每天前往的景点较少，或者基本都有交通工具）。
-    ===回复示例===
-       - 特点描述：<产品特点的具体描述>
-       - 理由：<说明该特点的依据，从产品详情中提取>
-    ===示例结束===
-    
-    ## 产品详情
-    {product_detail}
-    
-    ## 限制:
-    - 只分析旅行产品相关内容，拒绝回答与旅行产品无关的话题。
-    - 所输出的内容必须按照给定的格式进行组织，不能偏离框架要求。'''
-                messages = [
-                    {
-                        'role': 'user',
-                        'content': prompt
-                    }
-                ]
-                completion = client.chat.completions.create(
-                    model="qwen-plus-2024-09-19",
-                    messages=messages,
-                    temperature=0.5
-                )
-                query_content = completion.choices[0].message.content
-                file_content = query_content
-                file_name = product_id + ".txt"
+                file_content = product_feature
+                file_name = product_num + ".txt"
                 files.append(('files', (file_name, file_content.encode('utf-8'))))
                 break
             except Exception as exc:
-                result += f'retry:{retrys}/{current}/{product_id}/{exc};'
+                result += f'retry:{retrys}/{current}/{product_num}/{exc};'
                 retrys += 1
 
     needle_url = config['needle_url']
