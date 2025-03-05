@@ -2,6 +2,7 @@
 from pydantic import BaseModel
 import requests
 from typing import List
+from typing import Optional
 import json
 from utils.config import config
 from utils.security import decrypt
@@ -9,15 +10,15 @@ from server.response import RequestError
 
 
 class ProductSearchRequest(BaseModel):
+    max_num: Optional[int] = 5
     messages: List[object]
     class Config:
         arbitrary_types_allowed = True
 
 
 class ProductSearchResponse(BaseModel):
-    content: str
-    product_details: List[object]
-    product_features: List[str]
+    summary: str
+    products: List[object]
 
 
 def product_search(request: ProductSearchRequest):
@@ -29,6 +30,8 @@ def product_search(request: ProductSearchRequest):
     data = {
         "workflow_id": config['coze_product_search_wf_id'],
         "parameters": {
+            "env": config['env'],
+            "max_num": request.max_num,
             "messages": request.messages
         }
     }
