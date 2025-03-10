@@ -8,12 +8,12 @@ from server.response import RequestError
 
 
 class ProductCompareRequest(BaseModel):
-    ids: List[str]
+    product_nums: List[str]
     messages: List[object]
 
 
 class ProductCompareResponse(BaseModel):
-    result: List[object]
+    products: List[object]
 
 
 def product_compare(request: ProductCompareRequest):
@@ -25,8 +25,9 @@ def product_compare(request: ProductCompareRequest):
     data = {
         "workflow_id": config['coze_product_compare_wf_id'],
         "parameters": {
-            "ids": request.ids,
-            "messages": request.messages
+            "product_nums": request.product_nums,
+            "messages": request.messages,
+            "env": config["env"]
         }
     }
     response = requests.post(url, headers=headers, json=data)
@@ -35,7 +36,7 @@ def product_compare(request: ProductCompareRequest):
         input_data = response_data["data"]
         try:
             parsed_data = json.loads(input_data)
-            response = ProductSearchResponse(**parsed_data)
+            response = ProductCompareResponse(**parsed_data)
             return response
         except json.JSONDecodeError:
             raise RequestError(response.status_code, f"解析失败: {response.status_code}, 响应内容: {response.text}")
