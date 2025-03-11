@@ -21,7 +21,7 @@ class ProductQuestionResponse(BaseModel):
 
 
 def product_question(request: ProductQuestionRequest):
-    if request.is_uux != 0:
+    if request.is_uux != 0 or not request.messages:
         parsed_data = {'questions': [
             '这条线每日具体行程安排是怎样的？',
             '这条线的费用包含哪些项目？',
