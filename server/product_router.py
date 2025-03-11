@@ -7,6 +7,7 @@ from utils.log import log
 from services.product_search import product_search, ProductSearchRequest
 from services.product_compare import product_compare, ProductCompareRequest
 from services.product_update import product_update
+from services.product_question import product_question, ProductQuestionRequest
 from server.response import SuccessResponse, FailResponse
 
 store_router = APIRouter(prefix='/product', dependencies=[Depends(check_permission)])
@@ -45,4 +46,16 @@ async def product_update_api():
     except Exception as e:
         trace_info = traceback.format_exc()
         log.error(f'Exception for /product/update, e: {e}, trace: {trace_info}')
+        return FailResponse(error=str(e))
+
+
+# 4. you may ask
+@store_router.post('/product_question')
+async def product_question_api(request: ProductQuestionRequest):
+    try:
+        product_question_response = product_question(request)
+        return SuccessResponse(data=product_question_response)
+    except Exception as e:
+        trace_info = traceback.format_exc()
+        log.error(f'Exception for /product/product_question, request: {request}, e: {e}, trace: {trace_info}')
         return FailResponse(error=str(e))
