@@ -7,7 +7,7 @@ import time
 from server.auth import check_permission
 
 from utils.log import log
-from services.product_search import product_search, ProductSearchRequest, ProductSearchTaskResponse, get_summary, ProductsResponse
+from services.product_search import product_search, ProductSearchRequest, ProductSearchTaskResponse, get_summary, get_products, get_task_id
 from services.product_compare import product_compare, ProductCompareRequest
 from services.product_update import product_update
 from services.product_increment_update import product_increment_update, ProductUpdateIncrRequest
@@ -87,7 +87,9 @@ async def product_question_api(request: ProductQuestionRequest):
 # 5. 发起异步产品检索
 @store_router.post('/request_product_search')
 async def request_product_search(request: ProductSearchRequest):
-    return SuccessResponse(data=ProductSearchTaskResponse(task_id="aasd323d1-bhgy6x-cz5s6h1"))
+    task_id = get_task_id(request)
+    log.info(f"task_id: {task_id}, request: {request}")
+    return SuccessResponse(data=ProductSearchTaskResponse(taskId=task_id))
 
 
 # 6. 流式获取产品检索结果summary
@@ -95,10 +97,16 @@ async def request_product_search(request: ProductSearchRequest):
 async def get_summary_result(request: Request, task_id: str):
     try:
         async def event_stream():
-            async for event in get_summary(task_id):
-                if await request.is_disconnected():
-                    break
-                yield event
+            buffer = []
+            try:
+                async for event in get_summary(task_id):
+                    if await request.is_disconnected():
+                        break
+                    buffer.append(event.strip())
+                    yield event
+            finally:
+                merged_content = "".join(buffer)  # 合并所有事件内容
+                log.info(f"task_id: {task_id}, summary: {merged_content}")
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
     except Exception as e:
@@ -109,7 +117,11 @@ async def get_summary_result(request: Request, task_id: str):
 # 7. 获取产品检索products
 @store_router.get('/get_products_result/{task_id}')
 async def get_products_result(task_id: str):
-    return SuccessResponse(data=ProductsResponse(products=[{"productNum": "U001",
-"score":"94",
-"content":"该产品…"
-}]))
+    try:
+        products_response = get_products(task_id)
+        log.info(f"task_id: {task_id}, products: {products_response}")
+        return SuccessResponse(data=products_response)
+    except Exception as e:
+        trace_info = traceback.format_exc()
+        log.error(f'Exception for /product/get_products_result, request: {task_id}, e: {e}, trace: {trace_info}')
+        return FailResponse(error=str(e))
