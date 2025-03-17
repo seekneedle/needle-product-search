@@ -10,7 +10,7 @@ from server.response import RequestError
 
 
 class ProductSearchRequest(BaseModel):
-    max_num: Optional[int] = 5
+    maxNum: Optional[int] = 5
     messages: List[object]
     class Config:
         arbitrary_types_allowed = True
@@ -19,6 +19,7 @@ class ProductSearchRequest(BaseModel):
 class ProductSearchResponse(BaseModel):
     summary: str
     products: List[object]
+    classificationid: int
 
 
 def product_search(request: ProductSearchRequest):
@@ -31,7 +32,7 @@ def product_search(request: ProductSearchRequest):
         "workflow_id": config['coze_product_search_wf_id'],
         "parameters": {
             "env": config['env'],
-            "max_num": request.max_num,
+            "max_num": request.maxNum,
             "messages": request.messages
         }
     }
