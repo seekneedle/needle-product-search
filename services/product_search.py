@@ -7,6 +7,7 @@ import json
 from utils.config import config
 from utils.security import decrypt
 from server.response import RequestError
+import time
 
 
 class ProductSearchRequest(BaseModel):
@@ -20,6 +21,13 @@ class ProductSearchResponse(BaseModel):
     summary: str
     products: List[object]
     classificationid: int
+
+
+class ProductSearchTaskResponse(BaseModel):
+    task_id: str
+
+class ProductsResponse(BaseModel):
+    products: List[object]
 
 
 def product_search(request: ProductSearchRequest):
@@ -48,3 +56,9 @@ def product_search(request: ProductSearchRequest):
             raise RequestError(response.status_code, f"解析失败: {response.status_code}, 响应内容: {response.text}")
     else:
         raise RequestError(response.status_code, f"请求失败: {response.status_code}, 响应内容: {response.text}")
+
+
+async def get_summary(task_id: str):
+    for text in ["你好", "，", "向你", "推荐", "一款", "巴黎", "3天", "2晚", "的", "旅行", "产品", "，", "请问", "您", "感兴趣", "么", "？"]:
+        time.sleep(0.2)
+        yield f"data: {text}\n\n"
