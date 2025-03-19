@@ -98,8 +98,8 @@ def process_page(current):
     result = ''
 
     for product_num in product_nums:
-        retrys = 0
-        while retrys < 3:
+        retries = 0
+        while retries < 3:
             try:
                 product_feature = get_product_feature(product_num)
                 if product_feature is None or product_feature == '':
@@ -109,8 +109,8 @@ def process_page(current):
                 files.append(('files', (file_name, file_content.encode('utf-8'))))
                 break
             except Exception as exc:
-                result += f'retry:{retrys}/{current}/{product_num}/{exc};'
-                retrys += 1
+                result += f'retry:{retries}/{current}/{product_num}/{exc};'
+                retries += 1
 
     needle_url = config['needle_url']
     url = f"{needle_url}/vector_store/file/add"

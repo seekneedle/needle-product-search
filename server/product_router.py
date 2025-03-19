@@ -10,6 +10,7 @@ from utils.log import log
 from services.product_search import product_search, ProductSearchRequest, ProductSearchTaskResponse, get_summary, ProductsResponse
 from services.product_compare import product_compare, ProductCompareRequest
 from services.product_update import product_update
+from services.product_increment_update import product_increment_update, ProductUpdateIncrRequest
 from services.product_question import product_question, ProductQuestionRequest
 from server.response import SuccessResponse, FailResponse
 
@@ -51,6 +52,16 @@ async def product_update_api():
         log.error(f'Exception for /product/update, e: {e}, trace: {trace_info}')
         return FailResponse(error=str(e))
 
+# 3. 增量更新产品特征库
+@store_router.post('/increment_update')
+async def product_update_incr_api(request: ProductUpdateIncrRequest):
+    try:
+        response = product_increment_update(request)
+        return SuccessResponse(data=response)
+    except Exception as e:
+        trace_info = traceback.format_exc()
+        log.error(f'Exception for /product/update_incr, e: {e}, trace: {trace_info}')
+        return FailResponse(error=str(e))
 
 # 4. you may ask
 @store_router.post('/product_question')
