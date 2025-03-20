@@ -10,7 +10,7 @@ import traceback
 from server.response import RequestError
 
 class ProductUpdateIncrRequest(BaseModel):
-    type: str
+    # type: str
     productNums: List[str]
     class Config:
         arbitrary_types_allowed = True
@@ -126,7 +126,7 @@ def delete_files(file_ids):
     return deleted_nums
 
 def product_increment_update(request: ProductUpdateIncrRequest):
-    update_type = request.type
+    # update_type = request.type
     product_nums = request.productNums
 
     if len(product_nums) == 0:
@@ -168,8 +168,9 @@ def product_increment_update(request: ProductUpdateIncrRequest):
     # log.info(f'_incr: delete_names: {deleted_name_set}')
     # log.info(f'_incr: final_names:: {final_names}')
 
-    if update_type == 'del':
-        return ProductUpdateIncrResponse(results=final_names)
+    ## 去掉 del 逻辑
+    # if update_type == 'del':
+    #     return ProductUpdateIncrResponse(results=final_names)
 
     # 要 add 的：彻底删干净的 name，和本来就不存在的 name
     if len(final_names) == 0:
@@ -184,7 +185,9 @@ def product_increment_update(request: ProductUpdateIncrRequest):
 
         for f in as_completed(futures):
             try:
-                added_names.append(f.result())
+                j = json.loads(f.result())
+                j['data']['taskId'] = j['data'].pop('task_id') # 字段名驼峰化
+                added_names.append(json.dumps(j))
             except Exception as e:
                 trace_info = traceback.format_exc()
                 info = f'Exception for add_batch, e:{e}, prod_nums:{futures[f]}, trace: {trace_info}'
