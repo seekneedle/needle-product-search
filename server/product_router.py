@@ -20,8 +20,10 @@ store_router = APIRouter(prefix='/product', dependencies=[Depends(check_permissi
 # 1. 创建知识库
 @store_router.post('/product_search')
 async def product_search_api(request: ProductSearchRequest):
+    log.info(f'/product_search: request:{request}')
     try:
         product_search_response = product_search(request)
+        log.info(f'/product_search: response:{product_search_response}')
         return SuccessResponse(data=product_search_response)
     except Exception as e:
         trace_info = traceback.format_exc()
@@ -32,8 +34,10 @@ async def product_search_api(request: ProductSearchRequest):
 # 2. 产品对比
 @store_router.post('/product_compare')
 async def product_compare_api(request: ProductCompareRequest):
+    log.info(f'/product_compare: request:{request}')
     try:
         product_compare_response = product_compare(request)
+        log.info(f'/product_search: response:{product_compare_response}')
         return SuccessResponse(data=product_compare_response)
     except Exception as e:
         trace_info = traceback.format_exc()
@@ -44,8 +48,10 @@ async def product_compare_api(request: ProductCompareRequest):
 # 3. 全量更新产品特征库
 @store_router.post('/update')
 async def product_update_api():
+    log.info('/product_update')
     try:
         product_update_response = product_update()
+        log.info(f'/product_update: response:{product_update_response}')
         return SuccessResponse(data=product_update_response)
     except Exception as e:
         trace_info = traceback.format_exc()
@@ -55,8 +61,10 @@ async def product_update_api():
 # 3. 增量更新产品特征库
 @store_router.post('/increment_update')
 async def product_update_incr_api(request: ProductUpdateIncrRequest):
+    log.info(f'/increment_update: request:{request}')
     try:
         response = product_increment_update(request)
+        log.info(f'/increment_update: response:{response}')
         return SuccessResponse(data=response)
     except Exception as e:
         trace_info = traceback.format_exc()
@@ -66,8 +74,10 @@ async def product_update_incr_api(request: ProductUpdateIncrRequest):
 # 4. you may ask
 @store_router.post('/product_question')
 async def product_question_api(request: ProductQuestionRequest):
+    log.info(f'/product_question: request:{request}')
     try:
         product_question_response = product_question(request)
+        log.info(f'/product_question: response:{product_question_response}')
         return SuccessResponse(data=product_question_response)
     except Exception as e:
         trace_info = traceback.format_exc()

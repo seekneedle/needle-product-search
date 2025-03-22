@@ -20,6 +20,7 @@ class ProductUpdateIncrResponse(BaseModel):
 
 
 def get_product_feature(product_num):
+    log.info(f'product_num:{product_num}')
     url = config['coze_api_url']
     headers = {
         'Content-Type': 'application/json',
@@ -46,6 +47,7 @@ def get_product_feature(product_num):
 
 
 def process_add_batch(product_nums):
+    log.info(f'batch product_nums:{product_nums}')
     index_id = config['kb_id']
     needle_url = config['needle_url']
     auth = 'Basic bmVlZGxlOm5lZWRsZQ=='
@@ -81,6 +83,7 @@ def process_add_batch(product_nums):
     if response is not None and result == '':
         result = response.text
 
+    log.info(f'batch result:{result}')
     return result
 
 def get_file_ids(product_nums):
@@ -133,6 +136,7 @@ def product_increment_update(request: ProductUpdateIncrRequest):
         return ProductUpdateIncrResponse(results=[])
 
     files = get_file_ids(product_nums) # 只返回存在的 (doc_id, doc_name) 列表
+    log.info(f'file infos:{files}')
 
     # 存在的 file_id
     file_ids = [f['doc_id'] for f in files]
@@ -143,10 +147,10 @@ def product_increment_update(request: ProductUpdateIncrRequest):
     # 不存在的 names
     non_exist_name_set = set(product_nums) - exist_name_set
 
-    # log.info(f'_incr: exist file_ids:{file_ids}')
-    # log.info(f'_incr: exist names: {exist_name_set}')
-    # log.info(f'_incr: map: {file_id_names}')
-    # log.info(f'_incr: non exist names: {non_exist_name_set}')
+    log.info(f'exist file_ids:{file_ids}')
+    log.info(f'exist names: {exist_name_set}')
+    log.info(f'map: {file_id_names}')
+    log.info(f'non exist names: {non_exist_name_set}')
 
     # 删掉的 file_ids
     # 若所有 file_id 都不存在，不用删，直接设为 []；否则，设为 delete_files() 的结果
@@ -163,10 +167,10 @@ def product_increment_update(request: ProductUpdateIncrRequest):
     # 若是「新增」请求，把「不存在的」也放到「待新增」列表里
     final_names = list(set.union(deleted_name_set, non_exist_name_set))
 
-    # log.info(f'_incr: deleted_ids:{deleted_ids}')
-    # log.info(f'_incr: undeleted_names: {undeleted_name_set}')
-    # log.info(f'_incr: delete_names: {deleted_name_set}')
-    # log.info(f'_incr: final_names:: {final_names}')
+    log.info(f'deleted_ids:{deleted_ids}')
+    log.info(f'undeleted_names: {undeleted_name_set}')
+    log.info(f'delete_names: {deleted_name_set}')
+    log.info(f'final_names: {final_names}')
 
     ## 去掉 del 逻辑
     # if update_type == 'del':

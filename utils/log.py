@@ -28,16 +28,17 @@ def get_log():
         os.mkdir(path)
 
     level = logging.INFO if config['log_level'] == 'info' else logging.DEBUG
+    format = '%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d:%(funcName)s] - %(message)s'
     logging.basicConfig(
         level=level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
+        format=format,
         filename=os.path.join(os.path.dirname(__file__), '..', 'output', 'server.log')
     )
 
     # 添加自定义的日志处理器
     db_handler = DatabaseLogHandler()
     db_handler.setLevel(level)
-    db_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    db_handler.setFormatter(logging.Formatter(format))
     logging.getLogger().addHandler(db_handler)
 
     return logging.getLogger()
