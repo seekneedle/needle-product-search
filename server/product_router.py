@@ -88,7 +88,7 @@ async def product_question_api(request: ProductQuestionRequest):
 @store_router.post('/request_product_search')
 async def request_product_search(request: ProductSearchRequest):
     task_id = get_task_id(request)
-    log.info(f"task_id: {task_id}, request: {request}")
+    log.info(f"/request_product_search, task_id: {task_id}, request: {request}")
     return SuccessResponse(data=ProductSearchTaskResponse(taskId=task_id))
 
 
@@ -106,7 +106,7 @@ async def get_summary_result(request: Request, task_id: str):
                     yield event
             finally:
                 merged_content = "".join(buffer)  # 合并所有事件内容
-                log.info(f"task_id: {task_id}, summary: {merged_content}")
+                log.info(f"/get_summary_result, task_id: {task_id}, summary: {merged_content}")
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
     except Exception as e:
@@ -119,7 +119,7 @@ async def get_summary_result(request: Request, task_id: str):
 async def get_products_result(task_id: str):
     try:
         products_response = get_products(task_id)
-        log.info(f"task_id: {task_id}, products: {products_response}")
+        log.info(f"/get_products_result, task_id: {task_id}, products: {products_response}")
         return SuccessResponse(data=products_response)
     except Exception as e:
         trace_info = traceback.format_exc()
