@@ -132,7 +132,7 @@ def product_update():
     pages = int(get_product_pages())
     if pages > 0:
         delete_product_kb()
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             results = []
             # Create a dictionary to map futures to their corresponding product numbers for easy lookup later if needed
             future_to_page_num = {executor.submit(process_page, num): num for num in range(1, pages+1)}
