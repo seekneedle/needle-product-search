@@ -147,5 +147,6 @@ def product_update():
                     log.error(
                         f'Exception for get_product_details, page_num: {page_num}, e: {exc}, trace: {trace_info}')
                     results.append(f'Exception for get_product_details, page_num: {page_num}, e: {exc}, trace: {trace_info}')
+        log.info(f"All update results: {results}")
         return ProductUpdateResponse(results=results)
     return ProductUpdateResponse(results=[])
