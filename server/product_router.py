@@ -59,18 +59,18 @@ async def product_update_api():
         log.error(f'Exception for /product/update, e: {e}, trace: {trace_info}')
         return FailResponse(error=str(e))
 
-# 3. 增量更新产品特征库
-@store_router.post('/increment_update')
-async def product_update_incr_api(request: ProductUpdateIncrRequest):
-    log.info(f'/increment_update: request:{request}')
-    try:
-        response = product_increment_update(request)
-        log.info(f'/increment_update: response:{response}')
-        return SuccessResponse(data=response)
-    except Exception as e:
-        trace_info = traceback.format_exc()
-        log.error(f'Exception for /product/update_incr, e: {e}, trace: {trace_info}')
-        return FailResponse(error=str(e))
+# # 3. 增量更新产品特征库
+# @store_router.post('/increment_update')
+# async def product_update_incr_api(request: ProductUpdateIncrRequest):
+#     log.info(f'/increment_update: request:{request}')
+#     try:
+#         response = product_increment_update(request)
+#         log.info(f'/increment_update: response:{response}')
+#         return SuccessResponse(data=response)
+#     except Exception as e:
+#         trace_info = traceback.format_exc()
+#         log.error(f'Exception for /product/update_incr, e: {e}, trace: {trace_info}')
+#         return FailResponse(error=str(e))
 
 # 4. you may ask
 @store_router.post('/product_question')

@@ -146,20 +146,20 @@ def get_products(task_id: str):
         products = json.loads(products_entity.products)
         if isinstance(products, str):
             products = json.loads(products)
-        if config["env"] == "uat":
-            mock_product_nums = [
-                "U167127", "U167125", "U167418", "U167421", "U167800", "U167197",
-                "U167142", "U167070", "U167761", "U167502", "U167501", "U167497",
-                "U167070", "U167753", "U167284", "U167148", "U167149", "U167069",
-                "U167093", "U167460"
-            ]
+        # if config["env"] == "uat":
+        #     mock_product_nums = [
+        #         "U167127", "U167125", "U167418", "U167421", "U167800", "U167197",
+        #         "U167142", "U167070", "U167761", "U167502", "U167501", "U167497",
+        #         "U167070", "U167753", "U167284", "U167148", "U167149", "U167069",
+        #         "U167093", "U167460"
+        #     ]
 
-            # 随机选择与 products 个数相同的 productNum
-            selected_product_nums = random.sample(mock_product_nums, len(products))
+        #     # 随机选择与 products 个数相同的 productNum
+        #     selected_product_nums = random.sample(mock_product_nums, len(products))
 
-            # 更新 products 中的 productNum 字段
-            for i, product in enumerate(products):
-                product["productNum"] = selected_product_nums[i]
+        #     # 更新 products 中的 productNum 字段
+        #     for i, product in enumerate(products):
+        #         product["productNum"] = selected_product_nums[i]
     else:
         products = None
     return ProductsResponse(products=products)
