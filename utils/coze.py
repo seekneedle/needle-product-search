@@ -71,7 +71,7 @@ def get_feature_desc(product_detail, intro, parent_key, keys=None):
                 current_dict = current_dict.get(k)
                 if current_dict is None:
                     return f"{intro}："
-            
+
             if current_dict is not None:
                 last_key = key_list[-1]
                 if isinstance(current_dict, list):
@@ -80,7 +80,7 @@ def get_feature_desc(product_detail, intro, parent_key, keys=None):
                 else:
                     value_str = str(current_dict.get(last_key, ""))
                     values.append(value_str)
-        
+
         else:
             key_list = parent_key.split(".")
             current_dict = product_detail
@@ -90,7 +90,7 @@ def get_feature_desc(product_detail, intro, parent_key, keys=None):
                 current_dict = current_dict.get(k)
                 if current_dict is None:
                     return f"{intro}："
-            
+
             if current_dict is not None:
                 if isinstance(current_dict, list):
                     for child_dict in current_dict:
@@ -153,7 +153,7 @@ def get_dynamic_feature(product_num: str, env: str):
     except Exception:
         return {"cals": []}
     return {"cals": cals, "product_num": product_num, "product_feature": product_feature}
-        
+
 def get_dynamic_features(product_nums: list, env: str):
     # products = []
     # for product_num in product_nums:
@@ -235,7 +235,7 @@ def get_product_feature(product_num: str, env: str):
                     product_features.append("未找到行程信息")
         except Exception as e:
             product_features.append("未找到线路信息")
-        
+
         product_feature = '\n'.join(product_features)
     except Exception as e:
         print(f"product detail null: {e}")
@@ -254,10 +254,10 @@ def format_price(price_str):
     try:
         # 尝试将字符串转换为 Decimal 类型
         price_decimal = Decimal(price_str)
-        
+
         # 保留两位小数
         formatted_price = price_decimal.quantize(Decimal('0.00'))
-        
+
         return formatted_price
     except InvalidOperation:
         # 如果输入不是有效的数字，则捕获异常并返回 None
@@ -271,11 +271,11 @@ def format_price(price_str):
 def validate_cal(cal, condition):
     """
     检查旅行产品的团期数据是否符合需求条件。
-    
+
     参数:
     cal (dict): 旅行产品的团期数据。
     condition (dict): 需求的条件。
-    
+
     返回: bool: 如果 cal 符合 condition，则返回 True；否则返回 False。
     """
     try:
@@ -287,7 +287,7 @@ def validate_cal(cal, condition):
             if min_price is not None and price is not None:
                 if min_price > price:
                     return False
-            
+
             if max_price is not None and price is not None:
                 if max_price < price:
                     return False
@@ -297,7 +297,7 @@ def validate_cal(cal, condition):
             # 将字符串日期转换为 datetime 对象
             cal_depart_date = datetime.strptime(cal['depart_date'], "%Y-%m-%d")
             cal_back_date = datetime.strptime(cal['back_date'], "%Y-%m-%d")
-            
+
             condition_depart_date = datetime.strptime(condition['depart_date'], "%Y-%m-%d") if not_null(condition.get('depart_date')) else None
             condition_back_date = datetime.strptime(condition['back_date'], "%Y-%m-%d") if not_null(condition.get('back_date')) else None
 
@@ -321,12 +321,12 @@ def validate_cal(cal, condition):
             stock_cal = int(cal.stock)
             if stock_cal < stock_condition:
                 return False
-        
+
         if not_null(cal.stock):
             stock_cal = int(cal.stock)
             if stock_cal <= 0:
                 return False
-        
+
         # 如果所有条件都满足，则返回 True
         return True
     except ValueError as e:
