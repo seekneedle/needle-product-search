@@ -5,12 +5,13 @@ import requests
 from typing import List
 from typing import Optional
 import json
-import random
+import time
 
 from data.search import SearchEntity, ProductsEntity
 from utils.config import config
 from utils.security import decrypt
 from server.response import RequestError
+from datetime import datetime, timedelta
 
 
 class ProductSearchRequest(BaseModel):
@@ -139,27 +140,22 @@ async def get_summary(task_id: str):
     else:
         raise RequestError(response.status_code, f"请求失败: {response.status_code}, 响应内容: {response.text}")
 
+
 def get_products(task_id: str):
-    products_entity = ProductsEntity.query_first(task_id=task_id)
-    products = []
-    if products_entity:
-        products = json.loads(products_entity.products)
-        if isinstance(products, str):
-            products = json.loads(products)
-        # if config["env"] == "uat":
-        #     mock_product_nums = [
-        #         "U167127", "U167125", "U167418", "U167421", "U167800", "U167197",
-        #         "U167142", "U167070", "U167761", "U167502", "U167501", "U167497",
-        #         "U167070", "U167753", "U167284", "U167148", "U167149", "U167069",
-        #         "U167093", "U167460"
-        #     ]
+    start_time = datetime.now()
+    timeout = timedelta(seconds=120)
+    poll_interval = 3  # seconds
 
-        #     # 随机选择与 products 个数相同的 productNum
-        #     selected_product_nums = random.sample(mock_product_nums, len(products))
+    while datetime.now() - start_time < timeout:
+        products_entity = ProductsEntity.query_first(task_id=task_id)
+        if products_entity:
+            products = json.loads(products_entity.products)
+            if isinstance(products, str):
+                products = json.loads(products)
+            return ProductsResponse(products=products)
 
-        #     # 更新 products 中的 productNum 字段
-        #     for i, product in enumerate(products):
-        #         product["productNum"] = selected_product_nums[i]
-    else:
-        products = None
-    return ProductsResponse(products=products)
+        # Wait before trying again
+        time.sleep(poll_interval)
+
+    # If we get here, we timed out
+    return ProductsResponse(products=None)
