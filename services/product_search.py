@@ -1,5 +1,6 @@
 import uuid
 
+from dns.e164 import query
 from pydantic import BaseModel
 import requests
 from typing import List
@@ -12,6 +13,7 @@ from utils.config import config
 from utils.security import decrypt
 from server.response import RequestError
 from datetime import datetime, timedelta
+from utils.retrieve import retrieve
 
 
 class ProductSearchRequest(BaseModel):
@@ -67,79 +69,31 @@ def get_task_id(request: ProductSearchRequest):
     SearchEntity.create(task_id=task_id, maxNum=request.maxNum, messages=json.dumps(request.messages, ensure_ascii=False, indent=4))
     return task_id
 
+def get_query_message(messages, n=10):
+    turns = []
+    # 逆序遍历，填充对话轮次
+    for msg in reversed(messages):
+        if msg["role"] == "user":
+            turns.append(msg)
+        elif turns and turns[-1]["role"] == "user":  # 当前是AI且上一条是用户
+            turns.append(msg)
+        if len(turns) >= 2 * n:  # 每轮含用户+AI两条消息
+            break
+    # 恢复时间顺序并拼接
+    turns_ordered = reversed(turns)
+    return "\n".join(msg["content"] for msg in turns_ordered if msg.get("content"))
+
+
+
 async def get_summary(task_id: str):
     request = SearchEntity.query_first(task_id=task_id)
-    url = config['coze_stream_api_url']
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': decrypt(config['coze_api_auth'])
-    }
-    data = {
-        "workflow_id": config['coze_product_search_stream_wf_id'],
-        "parameters": {
-            "env": config['env'],
-            "max_num": request.maxNum,
-            "messages": json.loads(request.messages)
-        }
-    }
+    messages = request.messages
+    query_message = get_query_message(messages)
+    recent_messages = request.messages[-21:]
 
-    response = requests.post(url, headers=headers, json=data, stream=True)
-    products = []
-    if response.status_code == 200:
-        try:
-            # 由于您的数据看起来是以换行符分隔的JSON对象，我们可以逐行读取
-            for line in response.iter_lines():
-                # 过滤掉空的行以及以b'id:'或b'event:'开头的行
-                if line and not (line.startswith(b'id:') or line.startswith(b'event:')):
-                    decoded_line = line.decode('utf-8')
+    retrieve(query=query_message, top_k=request.maxNum)
 
-                    # 去除'data: '前缀
-                    if decoded_line.startswith('data: '):
-                        decoded_line = decoded_line[len('data: '):]
-
-                    # 确保decoded_line是一个有效的JSON字符串
-                    if decoded_line.strip():  # 检查是否为空字符串
-                        try:
-                            event_data = json.loads(decoded_line)
-
-                            content = event_data.get('content')
-                            if "\n\n" == content:
-                                continue
-                            if "\n\n" in content:
-                                content = content.replace("\n\n", "\n")
-                            if content:
-                                if "<sep>" in content:
-                                    if not products:
-                                        outputs = content.split("<sep>")
-                                        products.append(outputs[1])
-                                        yield f"data: {outputs[0]}\n\n"
-                                        if len(outputs) == 3:
-                                            products = json.dumps("".join(products), ensure_ascii=False, indent=4)
-                                            ProductsEntity.create(task_id=task_id, products=products)
-                                            break
-                                    else:
-                                        outputs = content.split("<sep>")
-                                        products.append(outputs[0])
-                                        products = json.dumps("".join(products), ensure_ascii=False, indent=4)
-                                        ProductsEntity.create(task_id=task_id, products=products)
-                                        break
-                                else:
-                                    if not products:
-                                        yield f"data: {content}\n\n"
-                                    else:
-                                        products.append(content)
-                        except json.JSONDecodeError as e:
-                            # 打印详细的错误信息，便于调试
-                            raise RequestError(response.status_code,
-                                               f"无法解析的JSON行: {decoded_line}, 错误: {e}")
-                    else:
-                        raise RequestError(response.status_code,
-                                           f"忽略空行或无效行: {decoded_line}")
-        except json.JSONDecodeError:
-            raise RequestError(response.status_code, f"解析失败: {response.status_code}, 响应内容: {response.text}")
-    else:
-        raise RequestError(response.status_code, f"请求失败: {response.status_code}, 响应内容: {response.text}")
-
+    # 使用多进程（注意，不是线程）并发调用 llm.generate 和 llm.stream_generate
 
 def get_products(task_id: str):
     start_time = datetime.now()
