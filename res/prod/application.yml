@@ -1,10 +1,10 @@
 log_level: info
 
 ip: 0.0.0.0
-port: 8405
+port: 8401
 
 username: needle_product_search
-password: f24f9f99b2081587d648d8cba8bb4d1104a38acc34d54f0bc9b5943338aaedfc
+password: f78bfabb43387f9e065ebec4eedc52fa353f7740fa49402fb7e0240915bb3ed7
 
 origins:
   - http://localhost
@@ -22,16 +22,23 @@ parent_category_id: cate_8b810173168b460180bb2b4e1c42e906_10224804
 coze_api_url: https://api.coze.cn/v1/workflow/run
 coze_stream_api_url: https://api.coze.cn/v1/workflow/stream_run
 coze_api_auth: 09e4ad622cb1c10cff42ef361994b5251417595dc375b1ac86bc661a5e1c8a988d0fab0aaef617fd8a19223c0366c7aa645247fc2de7a33ed4ea3489b3c0824a8346174a81e4e44624cdf02e5d854095f03d2cc0bec7dea29ac40f24dafa1f1d
-#coze_product_search_wf_id: "7454405767978926091"
+#coze_product_search_wf_id: "7454405767978926091" # query_products_uat
 coze_product_search_wf_id: "7481467551894274059" # query_products_uat_ex
 coze_product_search_stream_wf_id: "7484981134314356773"
-coze_product_compare_wf_id: "7454405767978926091"
+
+coze_product_search_task_wf_id: "7488594959365718025"
+coze_product_search_summary_wf_id: "7488635913984770099"
+coze_product_search_contents_wf_id: "7488657116343271459" # batch
+coze_product_search_content_wf_id: "7488632530797084711" # single
+
+
+coze_product_compare_wf_id: "7462301883848704027"
 coze_product_feature_wf_id: "7478322545244094503"
 coze_product_questions_wf_id: "7479732260448632867"
 kb_id: icmp3tfyk6
-# uux_url: gatewayqa.uuxlink.com
+# uux_url: mapi.uuxlink.com
 uux_url: mapi.uuxlink.com
-needle_url: http://8.152.213.191:8471
+needle_url: http://8.152.213.191:8475
 
 filestore_root_dir: output
 
