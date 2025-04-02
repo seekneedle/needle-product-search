@@ -101,7 +101,10 @@ def get_task_id(request: ProductSearchRequest):
         'env': env,
         'messages': request.messages
     }
+    t0 = datetime.now()
     res = coze_call(wf_id_name, params)
+    t1 = datetime.now()
+    log.info(f'coze_call get_input_summary_and_condition costs {t1 - t0}.')
     log.info(res)
     max_num = request.maxNum
     user_input_summary = res['user_input_summary']
@@ -111,19 +114,29 @@ def get_task_id(request: ProductSearchRequest):
 
     rerank_top_k = max_num
     retries = 0
+    t0 = datetime.now()
     while retries < 3:
         log.info(f'__retries:{retries}')
+        t1 = datetime.now()
         kb_res = coze.search_product_kb(user_input_summary, rerank_top_k, env)
+        t2 = datetime.now()
         product_nums = kb_res['product_nums']
         dyna_res = coze.get_dynamic_features(product_nums, env)['products']
+        t3 = datetime.now()
+        log.info(f'coze_api: search_product_kb costs {t2 - t1}')
+        log.info(f'coze_api: get_dynamic_features costs {t3 - t2}')
         remaining_product_nums = coze.filter_dynamic(condition, dyna_res)['product_nums']
         if len(remaining_product_nums) > 0:
             break
         rerank_top_k += max_num
         retries += 1
+    t4 = datetime.now()
+    log.info(f'batch: get_products overall costs {t4 - t0}')
 
     log.info(f'__remaining_product_nums:{remaining_product_nums}')
+    t0 = datetime.now()
     prod_res = coze.get_product_features(remaining_product_nums, env)['products']
+    log.info(f'coze_api: get_product_features costs {datetime.now() - t0}')
     product_infos = [{
         'product_num' : pn,
         'product_feature' : prod_res[pn]['product_feature'],
@@ -268,7 +281,9 @@ async def get_summary(task_id: str):
         'recent_messages': recent_messages,
         'product_features': full_features
     }
+    t0 = datetime.now()
     res = coze_call(wf_id_name, params)
+    log.info(f'coze_api: get_summary() costs {datetime.now() - t0}')
     log.info(f'__res: {res}')
     #
     # todo: sse
@@ -310,7 +325,9 @@ def get_products(task_id: str):
         'product_nums': product_nums,
         'full_features': full_features
     }
+    t0 = datetime.now()
     res = coze_call(wf_id_name, params)
+    log.info(f'coze_api: get_contents() costs {datetime.now() - t0}')
     log.info(f'__res: {res}')
 
     #

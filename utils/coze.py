@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import traceback
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 #
 # search_product_kb
@@ -237,16 +238,34 @@ def get_product_feature(product_num: str, env: str):
     return {"product_feature": product_feature_str, "product_num": product_num}
 
 
-#
-# todo 下面两个改成并发
-#
-def get_dynamic_features(product_nums: list, env: str):
-    products = { pn : get_dynamic_feature(pn, env) for pn in product_nums }
+# helper
+def batch_features(product_nums: list, env: str, func):
+    products = {}
+    #
+    # todo 并发数量应该多少？
+    #
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        # map<future, to_add_name_list>
+        futures = {executor.submit(func, pn, env): pn for pn in product_nums}
+
+        for f in as_completed(futures):
+            try:
+                feature = f.result()
+                prod_num = futures[f]
+                products[prod_num] = feature
+            except Exception as e:
+                trace_info = traceback.format_exc()
+                info = f'Exception for batch_features, e:{e}, prod_num:{futures[f]}, trace: {trace_info}'
+                print(f'__exception: {info}')
     return {'products': products}
 
+def get_dynamic_features(product_nums: list, env: str):
+    # products = { pn : get_dynamic_feature(pn, env) for pn in product_nums }
+    return batch_features(product_nums, env, get_dynamic_feature)
+
 def get_product_features(product_nums: list, env: str):
-    products = { pn : get_product_feature(pn, env) for pn in product_nums }
-    return {'products': products}
+    # products = { pn : get_product_feature(pn, env) for pn in product_nums }
+    return batch_features(product_nums, env, get_product_feature)
 
 ####
 
