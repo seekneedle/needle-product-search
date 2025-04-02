@@ -25,6 +25,13 @@ coze_api_auth: 09e4ad622cb1c10cff42ef361994b5251417595dc375b1ac86bc661a5e1c8a988
 #coze_product_search_wf_id: "7454405767978926091" # query_products_uat
 coze_product_search_wf_id: "7481467551894274059" # query_products_uat_ex
 coze_product_search_stream_wf_id: "7484981134314356773"
+
+coze_product_search_task_wf_id: "7488594959365718025"
+coze_product_search_summary_wf_id: "7488635913984770099"
+coze_product_search_contents_wf_id: "7488657116343271459" # 批处理
+coze_product_search_content_wf_id: "7488632530797084711" # 单个
+
+
 coze_product_compare_wf_id: "7462301883848704027"
 coze_product_feature_wf_id: "7478322545244094503"
 coze_product_questions_wf_id: "7479732260448632867"

@@ -2,12 +2,15 @@ import requests
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 import traceback
+import json
+import sys
 
 #
 # search_product_kb
 # get_dynamic_feature
-# get_dynamic_features
 # get_product_feature
+# get_dynamic_features
+# get_product_features
 # filter_dynamic
 #
 
@@ -49,12 +52,17 @@ def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
 ####
 
 ## helper
-def not_null(value):
-    if value is not None and value != "":
-        return True
-    return False
+# def not_null(value):
+#     if value is not None and value != "":
+#         return True
+#     return False
 
-## helper
+def field_valid(d: dict, key: str) -> bool:
+    return key in d and d[key] != ""
+
+def get_field_str(d: dict, key: str) -> str:
+    return str(d[key]) if field_valid(d, key) else ''
+
 def get_feature_desc(product_detail, intro, parent_key, keys=None):
     if not product_detail or not parent_key:
         return ""
@@ -132,34 +140,20 @@ def get_dynamic_feature(product_num: str, env: str):
             for cal in line["calList"]:
                 if cal['isOpen'] == 1:
                     out_cal = {}
-                    out_cal["price"] = str(cal['adultSalePrice']) if not_null(cal['adultSalePrice']) else ""
-                    # if cal['adultSalePrice'] is not None and cal['adultSalePrice'] != "":
-                    #     out_cal["price"] = str(cal['adultSalePrice'])
-                    # else:
-                    #     out_cal["price"] = ""
+                    out_cal["price"] = get_field_str(cal, 'adultSalePrice') # 原为 float 类型
                     out_cal["depart_date"] = cal['departDate']
                     out_cal["back_date"] = cal['calBackDate']
-                    out_cal["stock"] = str(cal['stock']) if not_null(cal['stock']) else ""
-                    # if cal['stock'] is not None and cal['stock'] != "":
-                    #     out_cal["stock"] = str(cal['stock'])
-                    # else:
-                    #     out_cal["stock"] = ""
+                    out_cal["stock"] = get_field_str(cal, 'stock') # 原为 int 类型
                     cals.append(out_cal)
-                    product_features.append(get_feature_desc(cal, "成人售价：", 'adultSalePrice'))
+                    product_features.append(get_feature_desc(cal, "成人售价", 'adultSalePrice'))
                     product_features.append(get_feature_desc(cal, "出发日期", 'departDate'))
                     product_features.append(get_feature_desc(cal, "返回日期", 'calBackDate'))
                     product_features.append(get_feature_desc(cal, "存量", 'stock'))
-        product_feature = '\n'.join(product_features)
+        product_feature_str = '\n'.join(product_features)
     except Exception:
         return {"cals": []}
-    return {"cals": cals, "product_num": product_num, "product_feature": product_feature}
+    return {"cals": cals, "product_num": product_num, "product_feature": product_feature_str}
 
-def get_dynamic_features(product_nums: list, env: str):
-    # products = []
-    # for product_num in product_nums:
-    #     products.append(get_dynamic_feature(product_num, env))
-    products = [get_dynamic_feature(pn, env) for pn in product_nums]
-    return {'products': products}
 
 ####
 
@@ -236,11 +230,23 @@ def get_product_feature(product_num: str, env: str):
         except Exception as e:
             product_features.append("未找到线路信息")
 
-        product_feature = '\n'.join(product_features)
+        product_feature_str = '\n'.join(product_features)
     except Exception as e:
         print(f"product detail null: {e}")
-        product_feature = ""
-    return {"product_feature": product_feature, "product_num": product_num}
+        product_feature_str = ""
+    return {"product_feature": product_feature_str, "product_num": product_num}
+
+
+#
+# todo 下面两个改成并发
+#
+def get_dynamic_features(product_nums: list, env: str):
+    products = { pn : get_dynamic_feature(pn, env) for pn in product_nums }
+    return {'products': products}
+
+def get_product_features(product_nums: list, env: str):
+    products = { pn : get_product_feature(pn, env) for pn in product_nums }
+    return {'products': products}
 
 ####
 
@@ -251,6 +257,8 @@ def format_price(price_str):
     参数: price_str (str): 包含价格信息的字符串。
     返回: Decimal: 保留两位小数的价格，如果发生异常则返回 None。
     """
+    if price_str is None or price_str == '':
+        return None
     try:
         # 尝试将字符串转换为 Decimal 类型
         price_decimal = Decimal(price_str)
@@ -280,10 +288,10 @@ def validate_cal(cal, condition):
     """
     try:
         # 检查价格是否在范围内
-        if not_null(cal.price):
-            min_price = format_price(condition.min_price)
-            max_price = format_price(condition.max_price)
-            price = format_price(cal.price)
+        if field_valid(cal, 'price'):
+            min_price = format_price(condition['min_price'])
+            max_price = format_price(condition['max_price'])
+            price = format_price(cal['price'])
             if min_price is not None and price is not None:
                 if min_price > price:
                     return False
@@ -293,13 +301,13 @@ def validate_cal(cal, condition):
                     return False
 
         # 检查出发日期和返回日期是否与条件中的日期有交集
-        if not_null(cal.depart_date) and (not_null(condition.depart_date) or not_null(condition.back_date)):
+        if field_valid(cal, 'depart_date') and (field_valid(condition, 'depart_date') or field_valid(condition, 'back_date')):
             # 将字符串日期转换为 datetime 对象
             cal_depart_date = datetime.strptime(cal['depart_date'], "%Y-%m-%d")
             cal_back_date = datetime.strptime(cal['back_date'], "%Y-%m-%d")
 
-            condition_depart_date = datetime.strptime(condition['depart_date'], "%Y-%m-%d") if not_null(condition.get('depart_date')) else None
-            condition_back_date = datetime.strptime(condition['back_date'], "%Y-%m-%d") if not_null(condition.get('back_date')) else None
+            condition_depart_date = datetime.strptime(condition['depart_date'], "%Y-%m-%d") if field_valid(condition, 'depart_date') else None
+            condition_back_date = datetime.strptime(condition['back_date'], "%Y-%m-%d") if field_valid(condition, 'back_date') else None
 
             # 条件出发时间比可选出发时间早超过7天
             if condition_depart_date and condition_depart_date < cal_depart_date:
@@ -309,21 +317,21 @@ def validate_cal(cal, condition):
             if condition_back_date and condition_back_date <= cal_depart_date:
                 return False
 
-        if not_null(cal.depart_date):
+        if field_valid(cal, 'depart_date'):
             cal_depart_date = datetime.strptime(cal['depart_date'], "%Y-%m-%d")
             # 如果 cal_depart_date 比今天早，返回 False
             if cal_depart_date < datetime.today():
                 return False
 
         # 检查存量是否满足最低要求
-        if not_null(condition.stock) and not_null(cal.stock):
-            stock_condition = int(condition.stock)
-            stock_cal = int(cal.stock)
+        if field_valid(condition, 'stock') and field_valid(cal, 'stock'):
+            stock_condition = int(condition['stock'])
+            stock_cal = int(cal['stock'])
             if stock_cal < stock_condition:
                 return False
 
-        if not_null(cal.stock):
-            stock_cal = int(cal.stock)
+        if field_valid(cal, 'stock'):
+            stock_cal = int(cal['stock'])
             if stock_cal <= 0:
                 return False
 
@@ -341,10 +349,53 @@ def filter_dynamic(condition, products):
     # condition = args.input.condition
     # products = args.input.products
     product_nums = []
-    for product in products:
-        for cal in product.cals:
+    # print(f'__filter dynamic: products:{products}')
+    for pn, product in products.items():
+        # print(f'__prodoct:{product}')
+        for cal in product['cals']:
             if validate_cal(cal, condition):
-                if product.product_num not in product_nums:
-                    product_nums.append(product.product_num)
+                if product['product_num'] not in product_nums:
+                    product_nums.append(product['product_num'])
                     break
     return {"product_nums": product_nums}
+
+
+
+if __name__ == '__main__':
+    env = 'uat'
+
+    user_input_summary = '用户需求：为父母二人带一个 12 岁男孩规划一个新加坡周末两天的旅行产品。'
+    rerank_top_k = 5
+    kb_res = search_product_kb(user_input_summary, rerank_top_k, env)
+    print(kb_res)
+    print(json.dumps(kb_res, indent=4))
+    print('_' * 40)
+
+    # product_num = 'U167127'
+    # ans = get_dynamic_feature(product_num, env)
+    # print(ans)
+    # print(json.dumps(ans, indent=4))
+    # print('_' * 40)
+
+    product_nums = kb_res['product_nums']
+    # [
+    #     "U182795",
+    #     "U176847",
+    #     "U174845",
+    #     "U181428",
+    #     "U184243"
+    # ]
+    ans = get_dynamic_features(product_nums, env)
+    print(ans)
+    print(json.dumps(ans, indent=4))
+    print('_' * 40)
+
+    ans = get_product_features(product_nums, env)
+    print(ans)
+    print(json.dumps(ans, indent=4))
+    print('_' * 40)
+    sys.exit(0)
+
+    from filter_dynamic_test_data import condition, products
+    ans = filter_dynamic(condition, products)
+    print(ans)
