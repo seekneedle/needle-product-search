@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 import traceback
-
+from datetime import datetime
 import time
 
 from server.auth import check_permission
@@ -88,8 +88,10 @@ async def product_question_api(request: ProductQuestionRequest):
 # 5. 发起异步产品检索
 @store_router.post('/request_product_search')
 async def request_product_search(request: ProductSearchRequest):
+    log.info(f'/request_product_search, request: {request}')
+    t0 = datetime.now()
     task_id = get_task_id(request)
-    log.info(f"/request_product_search, task_id: {task_id}, request: {request}")
+    log.info(f'/request_product_search costs {datetime.now() - t0}, task_id: {task_id}')
     return SuccessResponse(data=ProductSearchTaskResponse(taskId=task_id))
 
 class TaskRequest(BaseModel):
@@ -98,23 +100,28 @@ class TaskRequest(BaseModel):
 # 6. 流式获取产品检索结果summary
 @store_router.post('/get_summary_result')
 async def get_summary_result(request: Request, task_request: TaskRequest):
+    log.info(f'/get_summary_result, request: {request}')
+    t0 = datetime.now()
     try:
         async def event_stream():
-            buffer = []
+            buffer = '' # 用于 logging
+            cnt = 0
             try:
                 async for event in get_summary(task_request.taskId):
                     if await request.is_disconnected():
                         break
-                    buffer.append(event.strip())
+                    cnt += 1
+                    if cnt == 1:
+                        log.info(f'/get_summary_result: first chunk costs {datetime.now() - t0} to arrive.')
+                    buffer += event.strip()[len('data: '):]
                     yield event
             finally:
-                merged_content = "".join(buffer)  # 合并所有事件内容
-                log.info(f"/get_summary_result, task_id: {task_request.taskId}, summary: {merged_content}")
+                log.info(f'/get_summary_result, costs {datetime.now() - t0}. task_id: {task_request.taskId}, summary: {buffer}')
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
     except Exception as e:
         trace_info = traceback.format_exc()
-        log.error(f'Exception for /vector_store/get_summary_result, task_id: {task_request.taskId}, e: {e}, trace: {trace_info}')
+        log.error(f'Exception for /get_summary_result, task_id: {task_request.taskId}, e: {e}, trace: {trace_info}')
         return FailResponse(error=str(e))
 
 # 7. 获取产品检索products
@@ -124,26 +131,41 @@ async def get_products_result(
     max_retries: int = 60,
     retry_delay: int = 3  # 默认 3 秒
 ):
-    retry_count = 0
+    log.info(f'/get_products_result, task_id: {task_id}')
+    t0 = datetime.now()
+    resp = get_products(task_id, retry_delay * max_retries)
+    log.info(f'/get_products_result costs {datetime.now() - t0}, task_id: {task_id}, products: {resp}')
+    if resp:
+        return SuccessResponse(data=resp)
+    else:
+        return FailResponse(error="Products data not available after timeout")
 
+async def get_products_result_original(
+    task_id: str,
+    max_retries: int = 60,
+    retry_delay: int = 3  # 默认 3 秒
+):
+    log.info(f'/get_products_result, task_id: {task_id}')
+    t0 = datetime.now()
+    retry_count = 0
     while retry_count < max_retries:
         try:
             # 直接调用同步函数（不关心它的耗时）
             products_response = get_products(task_id)
-            log.info(f"/get_products_result, task_id: {task_id}, products: {products_response}")
+            log.info(f'/get_products_result, task_id: {task_id}, products: {products_response}')
 
             # 检查 products 是否为空
             if not products_response.products:
                 retry_count += 1
-                log.warning(f"Products empty, retrying... (Attempt {retry_count}/{max_retries})")
+                log.warning(f'Products empty, retrying... (Attempt {retry_count}/{max_retries})')
                 await asyncio.sleep(retry_delay)  # 关键点：异步 sleep，不阻塞事件循环
                 continue
-
+            log.info(f'/get_products_result costs {datetime.now() - t0}')
             return SuccessResponse(data=products_response)
 
         except Exception as e:
             trace_info = traceback.format_exc()
-            log.error(f'Exception for /product/get_products_result, request: {task_id}, e: {e}, trace: {trace_info}')
+            log.error(f'Exception for /get_products_result, request: {task_id}, e: {e}, trace: {trace_info}')
             return FailResponse(error=str(e))
 
     # 重试次数耗尽仍无数据

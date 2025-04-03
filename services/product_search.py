@@ -15,7 +15,8 @@ from server.response import RequestError
 from datetime import datetime, timedelta
 from utils.retrieve import retrieve
 from utils import coze
-
+from utils import llm
+from openai import OpenAI
 
 class ProductSearchRequest(BaseModel):
     maxNum: Optional[int] = 5
@@ -171,19 +172,19 @@ def get_query_message(messages, n=10):
 
 
 '''
-批处理中，
-product_feature = product_feature + "\n" + str(dynamic_feature)
-后两者分别来自 get_product_feature() 和 get_dynamic_feature()
-注意: dynamic 中不含 cal（数字化的原始动态feature）
-to check: str() 是什么格式，有 content 吗？
+coze workflow 的一些逻辑
 
+批处理中，
+    product_feature = product_feature + "\n" + str(dynamic_feature)
+后两者分别来自 get_product_feature() 和 get_dynamic_feature()，
+都已经是字符串（所以 dynamic_feature 其实没必要再 str() 一下）
+注意: dynamic 中不含 cal（数字化的原始动态feature）
 
 批处理之后，「按 score 排序且驼峰」中
-先按 score 排序各产品，再如下把各产品的「动静态 feature」拼接起来
-product_features_sorted 就是上面已经拼到一起的「动静态 feature」
-product_features_str = "\n\n".join(product_features_sorted)
-该拼接的字符串，用于调用大模型得到 summary
-
+先按 score 排序各产品，再把所有产品的 feature（批处理中已经拼接好的 product + dynamic）连接起来，
+得到一个包括所有产品的静态、动态 feature 的大字符串
+    product_features_str = "\n\n".join(product_features_sorted)
+该大字符串，用于调用大模型得到 summary
 '''
 
 #
@@ -244,16 +245,17 @@ product_features_str = "\n\n".join(product_features_sorted)
 
 
 async def get_summary(task_id: str):
-    log.info(f'____get_summary(): task_id:{task_id}')
+    log.info(f'__get_summary(): task_id:{task_id}')
     start_time = datetime.now()
     timeout = timedelta(seconds=120)
     poll_interval = 1  # seconds
 
     retries = 0
     while datetime.now() - start_time < timeout:
-        log.info(f'__get_product_contents: retries:{retries}')
+        log.info(f'__get_summary: retries:{retries}')
         request = SearchEntityEx.query_first(task_id=task_id)
         if request:
+            log.info(f'/get_summary_result waited for {datetime.now() - start_time} for data ready')
             break
         time.sleep(poll_interval) # wait before retrying
 
@@ -261,53 +263,101 @@ async def get_summary(task_id: str):
         #
         # todo sse 返回空结果应该怎么写
         #
-        return None
+        yield None
 
     log.info(f'____get_summary(): task_id:{task_id}, info from db:{request}')
     #
     # todo: 算 summary 时，用 user_input_summary 代替 recent_messaeges ?
     #
-    recent_messages = json.loads(request.messages)[-21:]
+    # recent_messages = json.loads(request.messages)[-21:]
+    user_input_summary = request.user_input_summary
     product_infos = json.loads(request.product_infos)
+    # log.info(f'__user_input_summary: {user_input_summary}')
+    # log.info(f'__product_infos: {product_infos}')
 
     # todo: 原版计算 summary 时，各产品是按 score 从高到低排序的，
-    #       意味着计算 summary 要再 content/score 都算出来之后
+    #       意味着计算 summary 要在 content/score 都算出来之后
     #       现在先不管这个
 
     full_features = "\n\n".join([p['product_feature'] + '\n' + p['dynamic_feature'] for p in product_infos])
-    wf_id_name = 'coze_product_search_summary_wf_id'
-    params = {
-        'env': config['env'],
-        'recent_messages': recent_messages,
-        'product_features': full_features
-    }
-    t0 = datetime.now()
-    res = coze_call(wf_id_name, params)
-    log.info(f'coze_api: get_summary() costs {datetime.now() - t0}')
-    log.info(f'__res: {res}')
+
     #
-    # todo: sse
+    # todo 优化这个 prompt
+    #
+    prompt = f'''
+根据产品信息回答客户问题。
+
+### 限制
+1. productNum是产品的唯一标识，必须包含每个产品的productNum。
+2. 只要提及产品，无论之前是否出现过，都要重新给出产品的productNum。
+
+### 产品信息：
+
+{full_features}
+
+### 用户的需求：
+
+{user_input_summary}
+'''
+
+    client = OpenAI(
+        api_key=decrypt(config['api_key']),
+        base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
+    )
+    messages = [
+        {
+            'role': 'user',
+            'content': prompt
+        }
+    ]
+    completion = client.chat.completions.create(
+        model="qwen-plus-2024-09-19",
+        messages=messages,
+        stream=True,
+        stream_options={"include_usage": True}
+    )
+    for chunk in completion:
+        if len(chunk.choices) > 0:
+            yield f"data: {chunk.choices[0].delta.content}\n\n"
+
+    # yield from llm.stream_generate(prompt)
+
+    # wf_id_name = 'coze_product_search_summary_wf_id'
+    # params = {
+    #     'env': config['env'],
+    #     'recent_messages': recent_messages,
+    #     'product_features': full_features
+    # }
+    # t0 = datetime.now()
+    # res = coze_call(wf_id_name, params)
+    # log.info(f'coze_api: get_summary() costs {datetime.now() - t0}')
+    # log.info(f'__res: {res}')
+    #
     # todo: res 写到 db 里？
     #
-    return res
 
     # 使用多进程（注意，不是线程）并发调用 llm.generate 和 llm.stream_generate
 
-def get_products(task_id: str):
+def get_products(task_id: str, timeout_secs: int):
     start_time = datetime.now()
-    timeout = timedelta(seconds=120)
-    poll_interval = 1  # seconds
+    timeout = timedelta(seconds=timeout_secs)
+    poll_interval = 2  # seconds
 
     retries = 0
     while datetime.now() - start_time < timeout:
         log.info(f'__get_product_contents: retries:{retries}')
         products_entity = SearchEntityEx.query_first(task_id=task_id)
         if products_entity:
+            log.info(f'/get_products_result waited for {datetime.now() - start_time} for data ready')
             break
         time.sleep(poll_interval) # wait before retrying
+        #
+        # todo sleep 是否要异步，像下面这样
+        # await asyncio.sleep(retry_delay)  # 关键点：异步 sleep，不阻塞事件循环
+        #
 
     if datetime.now() - start_time > timeout: # timeout
-        return ProductsResponse(products=None)
+        return None # 不能返回 ProductsResponse(products=None)，会报错
 
     prod_infos = json.loads(products_entity.product_infos)
     # log.info(f'__get_product_contents: input_summary:{products_entity.user_input_summary}')
@@ -327,7 +377,7 @@ def get_products(task_id: str):
     }
     t0 = datetime.now()
     res = coze_call(wf_id_name, params)
-    log.info(f'coze_api: get_contents() costs {datetime.now() - t0}')
+    log.info(f'/get_products_result coze_api: get_contents() costs {datetime.now() - t0}')
     log.info(f'__res: {res}')
 
     #
