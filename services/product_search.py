@@ -379,8 +379,9 @@ def get_products(task_id: str, timeout_secs: int):
     res = coze_call(wf_id_name, params)
     log.info(f'/get_products_result coze_api: get_contents() costs {datetime.now() - t0}')
     log.info(f'__res: {res}')
-
+    # products 中每一项有三个字段：content, score, product_num
+    products_sorted = sorted(res['products'], key=lambda p: -p['score'])
     #
     # todo res 写到 db 里？
     #
-    return ProductsResponse(products=res['products'])
+    return ProductsResponse(products=products_sorted)
