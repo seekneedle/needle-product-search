@@ -285,11 +285,12 @@ async def get_summary(task_id: str):
     # todo 优化这个 prompt
     #
     prompt = f'''
-根据产品信息回答客户问题。
+根据产品信息，简短回答客户问题，不要超过五百字。
 
 ### 限制
-1. productNum是产品的唯一标识，必须包含每个产品的productNum。
-2. 只要提及产品，无论之前是否出现过，都要重新给出产品的productNum。
+1. productNum 是产品的唯一标识，必须包含每个产品的 productNum。
+2. 只要提及产品，无论之前是否出现过，都要重新给出产品的 productNum。
+3. 但不要出现 "productNum" 这个英文词，要用"编号为某某的产品"这样的方式。
 
 ### 产品信息：
 
