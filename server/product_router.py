@@ -110,14 +110,23 @@ async def get_summary_result(request: Request, task_request: TaskRequest):
             try:
                 async for event in get_summary(task_id):
                     if await request.is_disconnected():
+                        if cnt == 0:
+                            t1 = datetime.now()
+                            log.info(f'/get_summary_result {task_id}, disconnect costs {t1 - t0} to arrive.')
                         break
                     cnt += 1
                     if cnt == 1:
-                        log.info(f'/get_summary_result {task_id}, first chunk costs {datetime.now() - t0} to arrive.')
+                        t1 = datetime.now()
+                        log.info(f'/get_summary_result {task_id}, first chunk costs {t1 - t0} to arrive.')
                     buffer += event.strip()[len('data: '):]
                     yield event
             finally:
-                log.info(f'/get_summary_result {task_id} costs {datetime.now() - t0}. summary: {buffer}')
+                # t1 是 收到第一个 event 的时刻（若收到了至少一个 event）
+                #    或 disconnect 时刻（若一个 event 都没收到）
+                # 在这两种情况下，t1 - t0 都是「等待时间」
+                # 最后 now - t1 是「纯接收时间」，「流输出开始 -> 流输出结束」的时间
+                log.info(f'/get_summary_result {task_id} receive stream costs {datetime.now() - t1}, total costs {datetime.now() - t0}')
+                log.info(f'/get_summary_result {task_id} summary: {buffer}')
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
     except Exception as e:

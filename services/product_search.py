@@ -106,7 +106,7 @@ def retrieve_products_bg(task_id: str, request):
     t0 = datetime.now()
     res = coze_call(wf_id_name, params)
     t1 = datetime.now()
-    log.info(f'coze_call get_input_summary_and_condition costs {t1 - t0}.')
+    log.info(f'coze_call {task_id} get_input_summary_and_condition costs {t1 - t0}.')
     log.info(res)
     max_num = request.maxNum
     user_input_summary = res['user_input_summary']
@@ -124,20 +124,20 @@ def retrieve_products_bg(task_id: str, request):
         product_nums = kb_res['product_nums']
         dyna_res = coze.get_dynamic_features(product_nums, env)['products']
         t3 = datetime.now()
-        log.info(f'coze_api: search_product_kb costs {t2 - t1}')
-        log.info(f'coze_api: get_dynamic_features costs {t3 - t2}')
+        log.info(f'coze_api {task_id} retrieve_kb costs {t2 - t1}')
+        log.info(f'coze_api {task_id} get_dynamic_features costs {t3 - t2}')
         remaining_product_nums = coze.filter_dynamic(condition, dyna_res)['product_nums']
         if len(remaining_product_nums) > 0:
             break
         rerank_top_k += max_num
         retries += 1
     t4 = datetime.now()
-    log.info(f'batch: get_products overall costs {t4 - t0}')
+    log.info(f'coze_api {task_id} reteieve_kb_dynamic_features total costs {t4 - t0}')
 
     log.info(f'__remaining_product_nums:{remaining_product_nums}')
     t0 = datetime.now()
     prod_res = coze.get_product_features(remaining_product_nums, env)['products']
-    log.info(f'coze_api: get_product_features costs {datetime.now() - t0}')
+    log.info(f'coze_api {task_id} get_product_features costs {datetime.now() - t0}')
     product_infos = [{
         'product_num' : pn,
         'product_feature' : prod_res[pn]['product_feature'],
@@ -154,7 +154,7 @@ def retrieve_products_bg(task_id: str, request):
         condition=json.dumps(condition, ensure_ascii=False, indent=4),
         product_infos=json.dumps(product_infos, ensure_ascii=False, indent=4)
     )
-    log.info(f'get_task_id(), retrieve_products costs {datetime.now() - tx}')
+    log.info(f'get_task_id() {task_id} retrieve_products costs {datetime.now() - tx}')
 
 def get_task_id(request: ProductSearchRequest):
     log.info(f'get_task_id(): request:{request}')
