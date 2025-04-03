@@ -17,6 +17,7 @@ from utils.retrieve import retrieve
 from utils import coze
 from utils import llm
 from openai import OpenAI
+import threading
 
 class ProductSearchRequest(BaseModel):
     maxNum: Optional[int] = 5
@@ -93,9 +94,8 @@ def product_search(request: ProductSearchRequest):
         raise RequestError(response.status_code, f"请求失败: {response.status_code}, 响应内容: {response.text}")
 
 
-def get_task_id(request: ProductSearchRequest):
-    log.info(f'____get_task_id(): request:{request}')
-    task_id = str(uuid.uuid4())
+def retrieve_products_bg(task_id: str, request):
+    tx = datetime.now()
     env = config['env']
     wf_id_name = 'coze_product_search_task_wf_id'
     params = {
@@ -117,7 +117,7 @@ def get_task_id(request: ProductSearchRequest):
     retries = 0
     t0 = datetime.now()
     while retries < 3:
-        log.info(f'__retries:{retries}')
+        # log.info(f'__retries:{retries}')
         t1 = datetime.now()
         kb_res = coze.search_product_kb(user_input_summary, rerank_top_k, env)
         t2 = datetime.now()
@@ -154,6 +154,12 @@ def get_task_id(request: ProductSearchRequest):
         condition=json.dumps(condition, ensure_ascii=False, indent=4),
         product_infos=json.dumps(product_infos, ensure_ascii=False, indent=4)
     )
+    log.info(f'get_task_id(), retrieve_products costs {datetime.now() - tx}')
+
+def get_task_id(request: ProductSearchRequest):
+    log.info(f'get_task_id(): request:{request}')
+    task_id = str(uuid.uuid4())
+    threading.Thread(target=retrieve_products_bg, args=(task_id, request)).start() # 启动后台线程
     return task_id
 
 def get_query_message(messages, n=10):
