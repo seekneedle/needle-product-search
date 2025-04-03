@@ -133,12 +133,12 @@ async def get_products_result(
 ):
     log.info(f'/get_products_result, task_id: {task_id}')
     t0 = datetime.now()
-    resp = get_products(task_id, retry_delay * max_retries)
+    resp = await get_products(task_id, retry_delay * max_retries)
     log.info(f'/get_products_result costs {datetime.now() - t0}, task_id: {task_id}, products: {resp}')
     if resp:
         return SuccessResponse(data=resp)
     else:
-        return FailResponse(error="Products data not available after timeout")
+        return FailResponse(error='Products data not available after timeout')
 
 async def get_products_result_original(
     task_id: str,

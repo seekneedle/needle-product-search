@@ -18,6 +18,7 @@ from utils import coze
 from utils import llm
 from openai import OpenAI
 import threading
+import asyncio
 
 class ProductSearchRequest(BaseModel):
     maxNum: Optional[int] = 5
@@ -117,7 +118,6 @@ def retrieve_products_bg(task_id: str, request):
     retries = 0
     t0 = datetime.now()
     while retries < 3:
-        # log.info(f'__retries:{retries}')
         t1 = datetime.now()
         kb_res = coze.search_product_kb(user_input_summary, rerank_top_k, env)
         t2 = datetime.now()
@@ -256,22 +256,16 @@ async def get_summary(task_id: str):
     timeout = timedelta(seconds=120)
     poll_interval = 1  # seconds
 
-    retries = 0
-    while datetime.now() - start_time < timeout:
-        log.info(f'__get_summary: retries:{retries}')
+    while datetime.now() - start_time <= timeout:
         request = SearchEntityEx.query_first(task_id=task_id)
         if request:
             log.info(f'/get_summary_result waited for {datetime.now() - start_time} for data ready')
             break
-        time.sleep(poll_interval) # wait before retrying
+        await asyncio.sleep(poll_interval)
 
-    if datetime.now() - start_time > timeout: # timeout
-        #
-        # todo sse 返回空结果应该怎么写
-        #
+    if datetime.now() - start_time > timeout: # timed out
         yield None
 
-    log.info(f'____get_summary(): task_id:{task_id}, info from db:{request}')
     #
     # todo: 算 summary 时，用 user_input_summary 代替 recent_messaeges ?
     #
@@ -345,23 +339,17 @@ async def get_summary(task_id: str):
 
     # 使用多进程（注意，不是线程）并发调用 llm.generate 和 llm.stream_generate
 
-def get_products(task_id: str, timeout_secs: int):
+async def get_products(task_id: str, timeout_secs: int):
     start_time = datetime.now()
     timeout = timedelta(seconds=timeout_secs)
     poll_interval = 2  # seconds
 
-    retries = 0
-    while datetime.now() - start_time < timeout:
-        log.info(f'__get_product_contents: retries:{retries}')
+    while datetime.now() - start_time <= timeout:
         products_entity = SearchEntityEx.query_first(task_id=task_id)
         if products_entity:
             log.info(f'/get_products_result waited for {datetime.now() - start_time} for data ready')
             break
-        time.sleep(poll_interval) # wait before retrying
-        #
-        # todo sleep 是否要异步，像下面这样
-        # await asyncio.sleep(retry_delay)  # 关键点：异步 sleep，不阻塞事件循环
-        #
+        await asyncio.sleep(poll_interval)
 
     if datetime.now() - start_time > timeout: # timeout
         return None # 不能返回 ProductsResponse(products=None)，会报错

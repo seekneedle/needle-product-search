@@ -5,6 +5,7 @@ import traceback
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from utils.log import log
 
 #
 # search_product_kb
@@ -44,11 +45,24 @@ def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
     response = requests.post(url, headers=headers, json=data)
     product_nums = []
     products = []
-    for chunk in response.json()['data']['chunks']:
-        metadata = chunk['metadata']
-        product_nums.append(metadata['doc_name'])
-        products.append({"product_feature": chunk['text'], "product_num": metadata['doc_name']})
+
+    try:
+        for chunk in response.json()['data']['chunks']:
+            metadata = chunk['metadata']
+            product_nums.append(metadata['doc_name'])
+            products.append({"product_feature": chunk['text'], "product_num": metadata['doc_name']})
+        # return {"product_nums": product_nums, "products": products}
+    except Exception as e:
+        trace_info = traceback.format_exc()
+        info = f'Exception for search_product_kb(), e:{e}, trace: {trace_info}'
+        log.info(f'__exception: {info}')
     return {"product_nums": product_nums, "products": products}
+
+    # for chunk in response.json()['data']['chunks']:
+    #     metadata = chunk['metadata']
+    #     product_nums.append(metadata['doc_name'])
+    #     products.append({"product_feature": chunk['text'], "product_num": metadata['doc_name']})
+    # return {"product_nums": product_nums, "products": products}
 
 ####
 
