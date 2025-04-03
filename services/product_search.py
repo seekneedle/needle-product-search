@@ -50,11 +50,11 @@ def coze_call(wf_id, params):
         "workflow_id": config[wf_id],
         "parameters": params
     }
-    log.info(f'____coze_call params: {params}')
+    log.info(f'__coze_call params: {params}')
     response = requests.post(url, headers=headers, json=data)
     if response.status_code == 200:
         response_data = response.json()
-        log.info(f'____coze_call response: {response_data}')
+        log.info(f'__coze_call response: {response_data}')
         input_data = response_data["data"]
         try:
             parsed_data = json.loads(input_data)
@@ -251,7 +251,7 @@ coze workflow 的一些逻辑
 
 
 async def get_summary(task_id: str):
-    log.info(f'__get_summary(): task_id:{task_id}')
+    log.info(f'__get_summary() {task_id}')
     start_time = datetime.now()
     timeout = timedelta(seconds=120)
     poll_interval = 1  # seconds
@@ -259,12 +259,13 @@ async def get_summary(task_id: str):
     while datetime.now() - start_time <= timeout:
         request = SearchEntityEx.query_first(task_id=task_id)
         if request:
-            log.info(f'/get_summary_result waited for {datetime.now() - start_time} for data ready')
+            log.info(f'/get_summary_result {task_id} costs {datetime.now() - start_time} for data ready')
             break
         await asyncio.sleep(poll_interval)
 
     if datetime.now() - start_time > timeout: # timed out
-        yield None
+        yield 'data: 不好意思，似乎出了些问题，目前没有可以推荐的\n\n'
+        return
 
     #
     # todo: 算 summary 时，用 user_input_summary 代替 recent_messaeges ?
@@ -340,6 +341,7 @@ async def get_summary(task_id: str):
     # 使用多进程（注意，不是线程）并发调用 llm.generate 和 llm.stream_generate
 
 async def get_products(task_id: str, timeout_secs: int):
+    log.info(f'__get_products() {task_id}')
     start_time = datetime.now()
     timeout = timedelta(seconds=timeout_secs)
     poll_interval = 2  # seconds
@@ -347,12 +349,12 @@ async def get_products(task_id: str, timeout_secs: int):
     while datetime.now() - start_time <= timeout:
         products_entity = SearchEntityEx.query_first(task_id=task_id)
         if products_entity:
-            log.info(f'/get_products_result waited for {datetime.now() - start_time} for data ready')
+            log.info(f'/get_products_result {task_id} costs {datetime.now() - start_time} for data ready')
             break
         await asyncio.sleep(poll_interval)
 
     if datetime.now() - start_time > timeout: # timeout
-        return None # 不能返回 ProductsResponse(products=None)，会报错
+        return ProductsResponse(products=[])
 
     prod_infos = json.loads(products_entity.product_infos)
     # log.info(f'__get_product_contents: input_summary:{products_entity.user_input_summary}')

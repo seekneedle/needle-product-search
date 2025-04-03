@@ -20,6 +20,7 @@ def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
     # user_input_summary = args.input.user_input_summary # 检索字符串（用户需求总结）
     # rerank_top_k = args.input.top_k # 知识库返回最相似片段数量
     # env = args.input.env
+    env = 'uat' # 暂时 hard code
     if env == 'prod':
         url = "http://8.152.213.191:8471/vector_store/retrieve"
         id = "icmp3tfyk6"
