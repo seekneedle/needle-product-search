@@ -266,9 +266,6 @@ async def get_summary(task_id: str):
             'content': prompt
         }
     ]
-    #
-    # todo 使用多进程（注意，不是线程）并发调用 llm.generate 和 llm.stream_generate
-    #
     log.info(f'/get_summary_result {task_id} before calling qwen')
     cnt = 0
     t0 = datetime.now()
@@ -277,11 +274,11 @@ async def get_summary(task_id: str):
         cnt += 1
         if cnt == 1:
             t1 = datetime.now()
-            log.info(f'/get_summary_result {task_id} first chunk costs llm {t1 - t0}, total {t1 - start_time} to arrive.')
+            log.info(f'/get_summary_result {task_id} first chunk arrived. costs first {t1 - t0}, wait+first {t1 - start_time}')
         log.info(f'/get_summary_result {task_id} chunk {cnt}')
         yield item
     t2 = datetime.now()
-    log.info(f'/get_summary_result {task_id} all chunks cost llm {t2 - t0}, total {t2 - start_time}')
+    log.info(f'/get_summary_result {task_id} all chunks arrived. cost all {t2 - t1}, wait+first+all {t2 - start_time}')
     #
     # todo: res 写到 db 里？
     #
