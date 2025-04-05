@@ -1,12 +1,10 @@
 import uuid
 
-from dns.e164 import query
 from pydantic import BaseModel
 import requests
 from typing import List
 from typing import Optional
 import json
-import time
 from data.search import SearchEntity, SearchEntityEx, ProductsEntity
 from utils.config import config
 from utils.log import log
@@ -19,6 +17,7 @@ from utils import llm
 from openai import OpenAI
 import threading
 import asyncio
+import aiohttp
 
 class ProductSearchRequest(BaseModel):
     maxNum: Optional[int] = 5
@@ -39,8 +38,7 @@ class ProductSearchTaskResponse(BaseModel):
 class ProductsResponse(BaseModel):
     products: List[object]
 
-
-def coze_call(wf_id, params):
+async def coze_workflow_async(wf_id, params):
     url = config['coze_api_url']
     headers = {
         'Content-Type': 'application/json',
@@ -50,22 +48,30 @@ def coze_call(wf_id, params):
         "workflow_id": config[wf_id],
         "parameters": params
     }
-    log.info(f'__coze_call params: {params}')
-    response = requests.post(url, headers=headers, json=data)
-    if response.status_code == 200:
-        response_data = response.json()
-        log.info(f'__coze_call response: {response_data}')
-        input_data = response_data["data"]
-        try:
-            parsed_data = json.loads(input_data)
-            return parsed_data
-            # response = ProductSearchResponse(**parsed_data)
-            # return response
-        except json.JSONDecodeError:
-            raise RequestError(response.status_code, f"解析失败: {response.status_code}, 响应内容: {response.text}")
-    else:
-        raise RequestError(response.status_code, f"请求失败: {response.status_code}, 响应内容: {response.text}")
+    log.info(f'__coze_call params: wf:{wf_id} {params}')
+    log.info(f'__coze_call_async wf:{wf_id} before aiohttp.post')
+    # response = requests.post(url, headers=headers, json=data)
 
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=data) as response:
+            log.info(f'__coze_call_async wf:{wf_id} after aiohttp.post')
+            if response.status == 200:
+                response_data = await response.json()
+                # log.info(f'__coze_call_async wf:{wf_id} response:{response_data}')
+                input_data = response_data['data']
+                try:
+                    parsed_data = json.loads(input_data)
+                    return parsed_data
+                except json.JSONDecodeError:
+                    err = f'json 解析失败: {response.status}, 响应内容: {await response.text()}'
+                    raise RequestError(response.status, err)
+            else:
+                err = f'请求失败: {response.status}, 响应内容: {await response.text()}'
+                raise RequestError(response.status, err)
+
+
+def coze_workflow_sync(wf_id, params):
+    return asyncio.run(coze_workflow_async(wf_id, params))
 
 def product_search(request: ProductSearchRequest):
     url = config['coze_api_url']
@@ -96,6 +102,7 @@ def product_search(request: ProductSearchRequest):
 
 
 def retrieve_products_bg(task_id: str, request):
+    log.info(f'/get_task_id {task_id} retrieve_products_bg() begins')
     tx = datetime.now()
     env = config['env']
     wf_id_name = 'coze_product_search_task_wf_id'
@@ -104,9 +111,10 @@ def retrieve_products_bg(task_id: str, request):
         'messages': request.messages
     }
     t0 = datetime.now()
-    res = coze_call(wf_id_name, params)
-    t1 = datetime.now()
-    log.info(f'coze_call {task_id} get_input_summary_and_condition costs {t1 - t0}.')
+    log.info(f'/get_task_id {task_id} wf.get_input_summary_and_condition before coze_call_sync')
+    # 不是 async 函数（因要用在 thread 中），无法 await 其 async 版本，只能用 sync 版本
+    res = coze_workflow_sync(wf_id_name, params)
+    log.info(f'/get_task_id {task_id} wf.get_input_summary_and_condition costs {datetime.now() - t0}.')
     log.info(res)
     max_num = request.maxNum
     user_input_summary = res['user_input_summary']
@@ -121,23 +129,23 @@ def retrieve_products_bg(task_id: str, request):
         t1 = datetime.now()
         kb_res = coze.search_product_kb(user_input_summary, rerank_top_k, env)
         t2 = datetime.now()
+        log.info(f'/get_task_id {task_id} kb.retrieve costs {t2 - t1}')
         product_nums = kb_res['product_nums']
         dyna_res = coze.get_dynamic_features(product_nums, env)['products']
         t3 = datetime.now()
-        log.info(f'coze_api {task_id} retrieve_kb costs {t2 - t1}')
-        log.info(f'coze_api {task_id} get_dynamic_features costs {t3 - t2}')
+        log.info(f'/get_task_id {task_id} db.get_dynamic_features costs {t3 - t2}')
         remaining_product_nums = coze.filter_dynamic(condition, dyna_res)['product_nums']
         if len(remaining_product_nums) > 0:
             break
         rerank_top_k += max_num
         retries += 1
     t4 = datetime.now()
-    log.info(f'coze_api {task_id} reteieve_kb_dynamic_features total costs {t4 - t0}')
+    log.info(f'/get_task_id {task_id} co.retrieve_kb_dynamic_features total costs {t4 - t0}')
 
     log.info(f'__remaining_product_nums:{remaining_product_nums}')
     t0 = datetime.now()
     prod_res = coze.get_product_features(remaining_product_nums, env)['products']
-    log.info(f'coze_api {task_id} get_product_features costs {datetime.now() - t0}')
+    log.info(f'/get_task_id {task_id} db.get_product_features costs {datetime.now() - t0}')
     product_infos = [{
         'product_num' : pn,
         'product_feature' : prod_res[pn]['product_feature'],
@@ -154,7 +162,7 @@ def retrieve_products_bg(task_id: str, request):
         condition=json.dumps(condition, ensure_ascii=False, indent=4),
         product_infos=json.dumps(product_infos, ensure_ascii=False, indent=4)
     )
-    log.info(f'get_task_id() {task_id} retrieve_products costs {datetime.now() - tx}')
+    log.info(f'/get_task_id {task_id} retrieve_products_bg() total costs {datetime.now() - tx}')
 
 def get_task_id(request: ProductSearchRequest):
     log.info(f'get_task_id(): request:{request}')
@@ -193,79 +201,29 @@ coze workflow 的一些逻辑
 该大字符串，用于调用大模型得到 summary
 '''
 
-#
-# 批处理中
-#
-# async def main(args: Args) -> Output:
-#     params = args.params
-#     product_feature = params["product_feature"]
-#     dynamic_feature = params["dynamic_feature"]
-#     content = params["content"]
-#     product_num = params["product_num"]
-#     score = params["score"]
-#
-#     # 构建输出对象
-#     ret: Output = {
-#         "product_feature": product_feature + "\n" + str(dynamic_feature),
-#         "product": {
-#             "content": content,
-#             "score": score,
-#             "product_num": product_num
-#         },
-#     }
-#     return ret
-
-#
-# 批处理之后，「按 score 排序且驼峰」
-#
-# async def main(args: Args) -> Output:
-#     params = args.params
-#     products = params['products']
-#     product_features = params['product_features']
-#
-#     # products 中每一项有三个字段：content, score, product_num
-#     products_sorted = sorted(products, key=lambda p: -p['score'])
-#
-#     # product_features 中每一项是个字符串。该字符串是以换行符分割的多行内容。
-#     # 其中第一行格式为 'productNum：U173757'，注意冒号是全角字符。
-#     # 这里从其第一行取出 product_num 的值。
-#     # map: product_num -> idx_in_dict>
-#     d = {}
-#     for i, p in enumerate(product_features):
-#         pn = p.split('\n')[0].split('：')[-1]
-#         d[pn] = i
-#     # for i, p in enumerate(products):
-#     #     pn = p['product_num']
-#     #     d[pn] = i
-#
-#     product_features_sorted = [product_features[d[p['product_num']]] for p in products_sorted]
-#     product_features_str = "\n\n".join(product_features_sorted)
-#
-#     products_cameled = [{'productNum' if k == 'product_num' else k:v for k,v in e.items()} for e in products_sorted]
-#     # 构建输出对象
-#     ret: Output = {
-#         "products": products_cameled,
-#         "product_features": product_features_str
-#     }
-#     return ret
-
-
 async def get_summary(task_id: str):
-    log.info(f'__get_summary() {task_id}')
+    log.info(f'/get_summary_result {task_id} get_summary() begins')
     start_time = datetime.now()
     timeout = timedelta(seconds=120)
-    poll_interval = 1  # seconds
+    poll_interval = 0.2 # seconds
 
-    while datetime.now() - start_time <= timeout:
+    data_ready = False
+    while datetime.now() - start_time < timeout:
+        tt0 = datetime.now()
         request = SearchEntityEx.query_first(task_id=task_id)
+        log.info(f'/get_summary_result {task_id} query_first costs {datetime.now() - tt0}')
         if request:
-            log.info(f'/get_summary_result {task_id} costs {datetime.now() - start_time} for data ready')
+            data_ready = True
             break
         await asyncio.sleep(poll_interval)
 
-    if datetime.now() - start_time > timeout: # timed out
+    waited = datetime.now() - start_time
+    if not data_ready: # timed out
+        log.info(f'/get_summary_result {task_id} timeout costs {waited}')
         yield 'data: 不好意思，似乎出了些问题，目前没有可以推荐的\n\n'
         return
+
+    log.info(f'/get_summary_result {task_id} data ready costs {waited}')
 
     #
     # todo: 算 summary 时，用 user_input_summary 代替 recent_messaeges ?
@@ -302,59 +260,54 @@ async def get_summary(task_id: str):
 {user_input_summary}
 '''
 
-    client = OpenAI(
-        api_key=decrypt(config['api_key']),
-        base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
-    )
     messages = [
         {
             'role': 'user',
             'content': prompt
         }
     ]
-    completion = client.chat.completions.create(
-        model="qwen-plus-2024-09-19",
-        messages=messages,
-        stream=True,
-        stream_options={"include_usage": True}
-    )
-    for chunk in completion:
-        if len(chunk.choices) > 0:
-            yield f"data: {chunk.choices[0].delta.content}\n\n"
-
-    # yield from llm.stream_generate(prompt)
-
-    # wf_id_name = 'coze_product_search_summary_wf_id'
-    # params = {
-    #     'env': config['env'],
-    #     'recent_messages': recent_messages,
-    #     'product_features': full_features
-    # }
-    # t0 = datetime.now()
-    # res = coze_call(wf_id_name, params)
-    # log.info(f'coze_api: get_summary() costs {datetime.now() - t0}')
-    # log.info(f'__res: {res}')
+    #
+    # todo 使用多进程（注意，不是线程）并发调用 llm.generate 和 llm.stream_generate
+    #
+    log.info(f'/get_summary_result {task_id} before calling qwen')
+    cnt = 0
+    t0 = datetime.now()
+    t1 = t0 # 万一没有第一个 chunk，给 t1 设个初值
+    async for item in llm.stream_generate_ex(messages):
+        cnt += 1
+        if cnt == 1:
+            t1 = datetime.now()
+            log.info(f'/get_summary_result {task_id} first chunk costs llm {t1 - t0}, total {t1 - start_time} to arrive.')
+        log.info(f'/get_summary_result {task_id} chunk {cnt}')
+        yield item
+    t2 = datetime.now()
+    log.info(f'/get_summary_result {task_id} all chunks cost llm {t2 - t0}, total {t2 - start_time}')
     #
     # todo: res 写到 db 里？
     #
 
-    # 使用多进程（注意，不是线程）并发调用 llm.generate 和 llm.stream_generate
 
 async def get_products(task_id: str, timeout_secs: int):
-    log.info(f'__get_products() {task_id}')
+    log.info(f'/get_products_result {task_id} get_products() begins')
     start_time = datetime.now()
     timeout = timedelta(seconds=timeout_secs)
-    poll_interval = 2  # seconds
+    poll_interval = 0.2 # seconds
 
-    while datetime.now() - start_time <= timeout:
+    data_ready = False
+    while datetime.now() - start_time < timeout:
+        tt0 = datetime.now()
         products_entity = SearchEntityEx.query_first(task_id=task_id)
+        log.info(f'/get_products_result {task_id} query_first costs {datetime.now() - tt0}')
         if products_entity:
-            log.info(f'/get_products_result {task_id} costs {datetime.now() - start_time} for data ready')
+            data_ready = True
             break
         await asyncio.sleep(poll_interval)
 
-    if datetime.now() - start_time > timeout: # timeout
+    waited = datetime.now() - start_time
+    if not data_ready:
+        log.info(f'/get_products_result {task_id} timeout costs {waited}')
         return ProductsResponse(products=[])
+    log.info(f'/get_products_result {task_id} data ready costs {waited}')
 
     prod_infos = json.loads(products_entity.product_infos)
     # log.info(f'__get_product_contents: input_summary:{products_entity.user_input_summary}')
@@ -373,8 +326,9 @@ async def get_products(task_id: str, timeout_secs: int):
         'full_features': full_features
     }
     t0 = datetime.now()
-    res = coze_call(wf_id_name, params)
-    log.info(f'/get_products_result coze_api: get_contents() costs {datetime.now() - t0}')
+    log.info(f'/get_products_result {task_id} before wf.get_contents')
+    res = await coze_workflow_async(wf_id_name, params)
+    log.info(f'/get_products_result {task_id} wf.get_contents costs {datetime.now() - t0}')
     log.info(f'__res: {res}')
     # products 中每一项有三个字段：content, score, product_num
     products_sorted = sorted(res['products'], key=lambda p: -p['score'])

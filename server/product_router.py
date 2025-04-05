@@ -88,7 +88,7 @@ async def product_question_api(request: ProductQuestionRequest):
 # 5. 发起异步产品检索
 @store_router.post('/request_product_search')
 async def request_product_search(request: ProductSearchRequest):
-    log.info(f'/request_product_search, request: {request}')
+    log.info(f'/request_product_search received request:{request}')
     t0 = datetime.now()
     task_id = get_task_id(request)
     log.info(f'/request_product_search {task_id} costs {datetime.now() - t0}')
@@ -101,37 +101,29 @@ class TaskRequest(BaseModel):
 @store_router.post('/get_summary_result')
 async def get_summary_result(request: Request, task_request: TaskRequest):
     task_id = task_request.taskId
-    log.info(f'/get_summary_result {task_id}')
+    log.info(f'/get_summary_result {task_id} api request received')
     t0 = datetime.now()
     try:
         async def event_stream():
             buffer = '' # 用于 logging
-            cnt = 0
             try:
+                cnt = 0
                 async for event in get_summary(task_id):
                     if await request.is_disconnected():
                         if cnt == 0:
-                            t1 = datetime.now()
-                            log.info(f'/get_summary_result {task_id}, disconnect costs {t1 - t0} to arrive.')
+                            log.info(f'/get_summary_result {task_id}, disconnect costs {datetime.now() - t0} to arrive.')
                         break
                     cnt += 1
-                    if cnt == 1:
-                        t1 = datetime.now()
-                        log.info(f'/get_summary_result {task_id}, first chunk costs {t1 - t0} to arrive.')
+                    # 首个 chunk 到达时刻、所有 chunk 结束时刻，都已在 get_summary() 中打 log，这里不重复打
                     buffer += event.strip()[len('data: '):]
                     yield event
             finally:
-                # t1 是 收到第一个 event 的时刻（若收到了至少一个 event）
-                #    或 disconnect 时刻（若一个 event 都没收到）
-                # 在这两种情况下，t1 - t0 都是「等待时间」
-                # 最后 now - t1 是「纯接收时间」，「流输出开始 -> 流输出结束」的时间
-                log.info(f'/get_summary_result {task_id} receive stream costs {datetime.now() - t1}, total costs {datetime.now() - t0}')
                 log.info(f'/get_summary_result {task_id} summary: {buffer}')
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
     except Exception as e:
         trace_info = traceback.format_exc()
-        log.error(f'Exception for /get_summary_result, task_id: {task_request.taskId}, e: {e}, trace: {trace_info}')
+        log.error(f'Exception for /get_summary_result {task_id}, e: {e}, trace: {trace_info}')
         return FailResponse(error=str(e))
 
 # 7. 获取产品检索products
@@ -141,10 +133,11 @@ async def get_products_result(
     max_retries: int = 60,
     retry_delay: int = 3  # 默认 3 秒
 ):
-    log.info(f'/get_products_result {task_id}')
+    log.info(f'/get_products_result {task_id} api request received')
     t0 = datetime.now()
     resp = await get_products(task_id, retry_delay * max_retries)
-    log.info(f'/get_products_result {task_id} costs {datetime.now() - t0}, products: {resp}')
+    log.info(f'/get_products_result {task_id} api request costs {datetime.now() - t0}')
+    log.info(f'/get_products_result {task_id} products: {resp}')
     if resp:
         return SuccessResponse(data=resp)
     else:
