@@ -1,5 +1,4 @@
 import uuid
-
 from pydantic import BaseModel
 import requests
 from typing import List
@@ -101,6 +100,15 @@ def product_search(request: ProductSearchRequest):
         raise RequestError(response.status_code, f"请求失败: {response.status_code}, 响应内容: {response.text}")
 
 
+# 在单独的 thread 中运行，发射后不管
+# 依次做如下操作：
+#   计算 user_input_summary 和 conditions。coze workflow。(io: network)
+#   从 kb 召回产品。(io: network)
+#   从 client db，get_dynamic_features (io: network)
+#   filter_dynamic (cpu)
+#   从 client db，get_product_features (io: network)
+#   写入 local sqlite (io: disk)
+# 几乎都是 io 操作，故 thread 可以自行调度。
 def retrieve_products_bg(task_id: str, request):
     log.info(f'/get_task_id {task_id} retrieve_products_bg() begins')
     tx = datetime.now()
@@ -111,16 +119,24 @@ def retrieve_products_bg(task_id: str, request):
         'messages': request.messages
     }
     t0 = datetime.now()
-    log.info(f'/get_task_id {task_id} wf.get_input_summary_and_condition before coze_call_sync')
+    log.info(f'/get_task_id {task_id} wf.analyze_user_input before coze_call_sync')
     # 不是 async 函数（因要用在 thread 中），无法 await 其 async 版本，只能用 sync 版本
     res = coze_workflow_sync(wf_id_name, params)
-    log.info(f'/get_task_id {task_id} wf.get_input_summary_and_condition costs {datetime.now() - t0}.')
+    log.info(f'/get_task_id {task_id} wf.analyze_user_input costs {datetime.now() - t0}.')
     log.info(res)
     max_num = request.maxNum
     user_input_summary = res['user_input_summary']
     condition = res['condition']
-    log.info(user_input_summary)
-    log.info(condition)
+    log.info(f'/get_task_id {task_id} user_input_summary:{user_input_summary}')
+    log.info(f'/get_task_id {task_id} condition:{condition}')
+
+    # 求 user_input_summary 和 condition，用 qwen 调用，与 coze workflow 做比较
+    # 两个 thread，并发调用
+    t00 = datetime.now()
+    user_analysis_qwen = llm.analyze_user_input(request.messages, task_id)
+    log.info(f'/get_task_id {task_id} qwen.analyze_user_input costs {datetime.now() - t00}')
+    log.info(f'/get_task_id {task_id} qwen.user_input_summary:{user_analysis_qwen[0]}')
+    log.info(f'/get_task_id {task_id} qwen.condition:{user_analysis_qwen[1]}')
 
     rerank_top_k = max_num
     retries = 0
@@ -270,7 +286,7 @@ async def get_summary(task_id: str):
     cnt = 0
     t0 = datetime.now()
     t1 = t0 # 万一没有第一个 chunk，给 t1 设个初值
-    async for item in llm.stream_generate_ex(messages):
+    async for item in llm.stream_generate_ex(messages, task_id, 'get_summary'):
         cnt += 1
         if cnt == 1:
             t1 = datetime.now()
