@@ -23,5 +23,5 @@ app.add_middleware(
 def start_server():
     ip = config['ip']
     port = config['port']
-    cpu_count = os.cpu_count()
+    cpu_count = os.cpu_count() * 2
     uvicorn.run("server.server:app", host=ip, port=port, workers=cpu_count)
