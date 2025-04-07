@@ -65,7 +65,7 @@ async def stream_generate_ex(messages, task_id: str, job_name: str, model_name: 
                 queue.get  # 阻塞调用，但通过线程池转为异步
             )
             if cnt == 0:
-                log.info('{model_name} stream_call {task_id} {job_name} WRAPPER first chunk received')
+                log.info(f'{model_name} stream_call {task_id} {job_name} WRAPPER first chunk received')
             cnt += 1
             if data is None: # 结束信号
                 break

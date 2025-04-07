@@ -47,27 +47,37 @@ async def coze_workflow_async(wf_id, params):
         "workflow_id": config[wf_id],
         "parameters": params
     }
-    log.info(f'__coze_call params: wf:{wf_id} {params}')
-    log.info(f'__coze_call_async wf:{wf_id} before aiohttp.post')
+    log.info(f'coze_call_async params: wf:{wf_id} {params}')
     # response = requests.post(url, headers=headers, json=data)
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=data) as response:
-            log.info(f'__coze_call_async wf:{wf_id} after aiohttp.post')
-            if response.status == 200:
-                response_data = await response.json()
-                # log.info(f'__coze_call_async wf:{wf_id} response:{response_data}')
-                input_data = response_data['data']
-                try:
-                    parsed_data = json.loads(input_data)
-                    return parsed_data
-                except json.JSONDecodeError:
-                    err = f'json 解析失败: {response.status}, 响应内容: {await response.text()}'
-                    raise RequestError(response.status, err)
-            else:
-                err = f'请求失败: {response.status}, 响应内容: {await response.text()}'
-                raise RequestError(response.status, err)
-
+    # coze workflow 返回格式：https://www.coze.cn/open/docs/developer_guides/workflow_run
+    retries = 0
+    while retries < 3:
+        log.info(f'coze_call_async wf:{wf_id} retries:{retries} before aiohttp.post')
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=data) as response:
+                log.info(f'coze_call_async wf:{wf_id} retries:{retries} after aiohttp.post')
+                if response.status == 200:
+                    response_data = await response.json()
+                    log.info(f'coze_call_async wf:{wf_id} retries:{retries} http ok, response:{response_data}')
+                    if response_data['code'] == 0: # coze workflow 执行成功
+                        input_data = response_data['data']
+                        try:
+                            parsed_data = json.loads(input_data)
+                            return parsed_data
+                        except json.JSONDecodeError:
+                            err = f'coze_call_async wf:{wf_id} retries:{retries} json parse error:{response.status}, 响应内容: {await response.text()}'
+                            log.error(err)
+                            # raise RequestError(response.status, err)
+                    else: # coze workflow 执行失败
+                        pass # 不需要干啥（log 也在上面打了），retry 下一次
+                else:
+                    err = f'coze_call_async wf:{wf_id} retries:{retries} http bad {response.status}, 响应内容: {await response.text()}'
+                    log.error(err)
+                    # raise RequestError(response.status, err)
+        await asyncio.sleep(1)
+        retries += 1
+    return None
 
 def coze_workflow_sync(wf_id, params):
     return asyncio.run(coze_workflow_async(wf_id, params))
@@ -122,11 +132,22 @@ def retrieve_products_bg(task_id: str, request):
     log.info(f'/get_task_id {task_id} wf.analyze_user_input before coze_call_sync')
     # 不是 async 函数（因要用在 thread 中），无法 await 其 async 版本，只能用 sync 版本
     res = coze_workflow_sync(wf_id_name, params)
-    #
-    # todo error handling
-    #
     log.info(f'/get_task_id {task_id} wf.analyze_user_input costs {datetime.now() - t0}')
-    # log.info(res)
+
+    # 若 workflow.analyze_user_input 返回为 None，说明有内部错误，目前无法处理。
+    # 将 user_input_summary, condition, product_infos 都置为空，写入 db，供后续两个调用使用。
+    if res is None:
+        log.info(f'/get_task_id {task_id} wf.analyze_user_input result None')
+        SearchEntityEx.create(
+            task_id=task_id,
+            max_num=0,
+            messages=json.dumps(request.messages, ensure_ascii=False, indent=4),
+            user_input_summary='',
+            condition='',
+            product_infos=''
+        )
+        log.info(f'/get_task_id {task_id} retrieve_products_bg() total costs {datetime.now() - tx}')
+
     user_input_summary = res['user_input_summary']
     condition = res['condition']
     log.info(f'/get_task_id {task_id} user_input_summary:{user_input_summary}')
@@ -247,6 +268,12 @@ async def get_summary(task_id: str):
 
     log.info(f'/get_summary_result {task_id} data ready costs {waited}')
 
+    # 从 db 里取出的 user_summary 为空字符串：前面 get_task_id 出错了
+    if request.user_input_summary == '':
+        log.info(f'/get_summary_result {task_id} db.user_input_summary empty')
+        yield 'data: 不好意思，似乎出了些问题，目前没有可以推荐的\n\n'
+        return
+
     #
     # todo: 算 summary 时，用 user_input_summary 代替 recent_messaeges ?
     #
@@ -288,7 +315,7 @@ async def get_summary(task_id: str):
             'content': prompt
         }
     ]
-    model_name = 'qwen-plus'
+    model_name = 'qwen-turbo'
     log.info(f'/get_summary_result {task_id} before calling {model_name}')
     cnt = 0
     t0 = datetime.now()
@@ -297,11 +324,31 @@ async def get_summary(task_id: str):
         cnt += 1
         if cnt == 1:
             t1 = datetime.now()
-            log.info(f'/get_summary_result {task_id} first chunk arrived. costs first {t1 - t0}, wait+first {t1 - start_time}')
+            log.info(f'/get_summary_result {task_id} {model_name} first chunk arrived. costs first {t1 - t0}, wait+first {t1 - start_time}')
         # log.info(f'/get_summary_result {task_id} chunk {cnt}')
         yield item
     t2 = datetime.now()
-    log.info(f'/get_summary_result {task_id} all chunks arrived. cost all {t2 - t1}, wait+first+all {t2 - start_time}')
+    log.info(f'/get_summary_result {task_id} {model_name} all chunks arrived. cost all {t2 - t1}, wait+first+all {t2 - start_time}')
+
+    ##### for now, disables qwen-plus, uses qwen-turbo instead
+    # model_name = 'qwen-plus'
+    # log.info(f'/get_summary_result {task_id} before calling {model_name}')
+    # cnt = 0
+    # t0 = datetime.now()
+    # t1 = t0 # 万一没有第一个 chunk，给 t1 设个初值
+    # buffer = ''
+    # async for item in llm.stream_generate_ex(messages, task_id, 'get_summary', model_name):
+    #     cnt += 1
+    #     if cnt == 1:
+    #         t1 = datetime.now()
+    #         log.info(f'/get_summary_result {task_id} {model_name} first chunk arrived. costs first {t1 - t0}, wait+first {t1 - start_time}')
+    #     # log.info(f'/get_summary_result {task_id} chunk {cnt}')
+    #     # yield item
+    #     buffer += item.strip()[len('data: '):]
+    # t2 = datetime.now()
+    # log.info(f'/get_summary_result {task_id} {model_name} all chunks arrived. cost all {t2 - t1}, wait+first+all {t2 - start_time}')
+    # log.info(f'/get_summary_result {task_id} {model_name} summary: {buffer}')
+
     #
     # todo: res 写到 db 里？
     #
@@ -331,6 +378,11 @@ async def get_products(task_id: str, timeout_secs: int):
         return ProductsResponse(products=[])
     log.info(f'/get_products_result {task_id} data ready costs {waited}')
 
+    # 从 db 里取出的 products 为空字符串：前面 get_task_id 出错了
+    if products_entity.product_infos == '':
+        log.info(f'/get_products_result {task_id} db.product_infos empty')
+        return ProductsResponse(products=[])
+
     prod_infos = json.loads(products_entity.product_infos)
     # log.info(f'__get_product_contents: input_summary:{products_entity.user_input_summary}')
     # log.info(f'__get_product_contents: product_infos:{prod_infos}')
@@ -350,8 +402,11 @@ async def get_products(task_id: str, timeout_secs: int):
     t0 = datetime.now()
     log.info(f'/get_products_result {task_id} before wf.get_contents')
     res = await coze_workflow_async(wf_id_name, params)
+    if res is None:
+        return ProductsResponse(products=[])
+
     log.info(f'/get_products_result {task_id} wf.get_contents costs {datetime.now() - t0}')
-    log.info(f'__res: {res}')
+    log.info(f'/get_products_result {task_id} wf.get_contents result {res}')
     # products 中每一项有三个字段：content, score, product_num
     products_sorted = sorted(res['products'], key=lambda p: -p['score'])
     #
