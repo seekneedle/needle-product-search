@@ -12,12 +12,13 @@ class ProductsEntity(TableModel):
     products = Column(String)
 
 
-class SearchEntityEx(TableModel):
+class SearchEntityExx(TableModel):
     task_id = Column(String)
     max_num = Column(Integer)
     messages = Column(String)
     user_input_summary = Column(String)
     condition = Column(String)
+    user_intention = Column(Integer)
     product_infos = Column(String)
     result = Column(String)
     # create_time DATETIME DEFAULT CURRENT_TIMESTAMP,

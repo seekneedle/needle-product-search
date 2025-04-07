@@ -22,8 +22,7 @@ def qwen_call(messages, return_type: str, task_id: str, job_name: str, model_nam
     log.info(f'{model_name} {task_id} {job_name} begins')
     t0 = datetime.now()
     completion = client.chat.completions.create(
-        # model='qwen-plus-2024-09-19',
-        model=model_name, #'qwen-plus',
+        model=model_name,
         messages=messages,
         response_format={'type': return_type}
     )
@@ -127,6 +126,9 @@ def qwen_stream_call_logs(messages, queue):
     queue.put(None)
 '''
 
+#
+# 目前只用到了 user_intention
+#
 def analyze_user_input(user_messages: list, task_id: str, model_name: str):
     prompt_user_input = f'''
         根据用户聊天历史，总结用户对旅行产品的需求。要以用户的口吻输出，不要以客服人员的角度总结。
@@ -138,41 +140,55 @@ def analyze_user_input(user_messages: list, task_id: str, model_name: str):
 
     recent_messages = user_messages[-11:]
     prompt_condition = f'''
-### 角色
-根据客户user的聊天历史，总结客户对于出行时间、产品价格、产品存量的需求，放到 json 对象中，结构化返回。
+        ### 角色
+        根据客户user的聊天历史，总结客户对于出行时间、产品价格、产品存量的需求，放到 json 对象中，结构化返回。
 
-### 能力1：提取产品出行时间要求
-1. 根据聊天历史，提取客户希望的出发时间到depart_date，如果没有提及出发时间，则输出空。
-2. 根据聊天历史，提取客户希望的返回时间到back_date，如果没有提及返回时间，则输出空。
-3. 提取格式为yyyy-MM-dd，比如：2025-06-29。
+        ### 能力1：提取产品出行时间要求
+        1. 根据聊天历史，提取客户希望的出发时间到depart_date，如果没有提及出发时间，则输出空。
+        2. 根据聊天历史，提取客户希望的返回时间到back_date，如果没有提及返回时间，则输出空。
+        3. 提取格式为yyyy-MM-dd，比如：2025-06-29。
 
-### 能力2： 提取产品存量要求
-1. 根据聊天历史，提取客户要求的最少存量，存量不能小于1。
-2. 如果用户没有提及最小存量，默认为1.
-3. 输出存量要求必须是整数。
+        ### 能力2： 提取产品存量要求
+        1. 根据聊天历史，提取客户要求的最少存量，存量不能小于1。
+        2. 如果用户没有提及最小存量，默认为1.
+        3. 输出存量要求必须是整数。
 
-### 能力3： 提取产品价格要求
-1. 根据聊天历史，提取客户要求的最低价格，如果没有提及最低价格，则最低价格输出0。
-2. 根据聊天历史，提取客户要求的最高价格，如果没有提起最高价格，则最高价格输出空。
+        ### 能力3： 提取产品价格要求
+        1. 根据聊天历史，提取客户要求的最低价格，如果没有提及最低价格，则最低价格输出0。
+        2. 根据聊天历史，提取客户要求的最高价格，如果没有提起最高价格，则最高价格输出空。
 
-### 限制
-1. 不允许编造内容。
-2. 必须严格按照客户聊天历史中的信息进行提取。
+        ### 限制
+        1. 不允许编造内容。
+        2. 必须严格按照客户聊天历史中的信息进行提取。
 
-### 用户聊天历史
+        ### 用户聊天历史
 
-{recent_messages}
+        {recent_messages}
 '''
+
+    prompt_user_intention = f'''
+        根据用户聊天历史，判断用户最后的意图。结果放到 json 对象中，结构化返回。
+        如果用户感觉以前系统推荐的产品不太合适、或者不够多，希望再推荐些其他产品，返回 intention = 1。
+        如果用户表示出对某个或某几个产品的肯定，或进一步询问已推荐的一个或几个产品的详细信息（如出发日期、价格、特点等），或想对比几个已推荐产品的某些特点，返回 intention = 2，并将用户指定的诸产品放入 product_nums 列表中。
+        如果是其他意图，返回 intention = 0。
+        并将理由放在 reason 中。
+        用户聊天历史记录为：{user_messages}
+    '''
+
     messages_user_input = [{'role': 'user', 'content': prompt_user_input}]
     messages_condition = [{'role': 'user', 'content': prompt_condition}]
+    messages_user_intention = [{'role': 'user', 'content': prompt_user_intention}]
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(qwen_call, messages_user_input, 'text', task_id, 'user_input_summary', model_name)  # 提交任务
-        f2 = executor.submit(qwen_call, messages_condition, 'json_object', task_id, 'condition', model_name)
-        res1 = f1.result()
-        res2 = f2.result()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        # f1 = executor.submit(qwen_call, messages_user_input, 'text', task_id, 'user_input_summary', model_name)  # 提交任务
+        # f2 = executor.submit(qwen_call, messages_condition, 'json_object', task_id, 'condition', model_name)
+        f3 = executor.submit(qwen_call, messages_user_intention, 'json_object', task_id, 'user_intention', model_name)
+        # res1 = f1.result()
+        # res2 = f2.result()
+        res3 = f3.result()
 
-    return (res1, json.loads(res2))
+    return (json.loads(res3),)
+    # return (res1, json.loads(res2), json.loads(res3))
 
 
 if __name__ == '__main__':
@@ -188,7 +204,8 @@ if __name__ == '__main__':
         },
         {
             "role": "user",
-            "content": "嗯，我们不希望太累，想轻松点。从北京出发。费用不是问题，至少五万起。要快，本周末之前必须出发。"
+            "content": "这几个都不错，帮我比较一下它们的特色吧，排个序",
+            # "content": "嗯，我们不希望太累，想轻松点。从北京出发。费用不是问题，至少五万起。要快，本周末之前必须出发。"
         }
     ]
 
@@ -196,5 +213,6 @@ if __name__ == '__main__':
     model_name = 'qwen-plus'
     user_analysis_qwen = analyze_user_input(request_messages, task_id, model_name)
     log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
-    log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{user_analysis_qwen[0]}')
-    log.info(f'/get_task_id {task_id} {model_name}.condition:{user_analysis_qwen[1]}')
+    # log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{user_analysis_qwen[0]}')
+    # log.info(f'/get_task_id {task_id} {model_name}.condition:{user_analysis_qwen[1]}')
+    log.info(f'/get_task_id {task_id} {model_name}.intention:{user_analysis_qwen[0]}')
