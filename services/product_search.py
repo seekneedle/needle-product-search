@@ -122,22 +122,25 @@ def retrieve_products_bg(task_id: str, request):
     log.info(f'/get_task_id {task_id} wf.analyze_user_input before coze_call_sync')
     # 不是 async 函数（因要用在 thread 中），无法 await 其 async 版本，只能用 sync 版本
     res = coze_workflow_sync(wf_id_name, params)
-    log.info(f'/get_task_id {task_id} wf.analyze_user_input costs {datetime.now() - t0}.')
-    log.info(res)
-    max_num = request.maxNum
+    #
+    # todo error handling
+    #
+    log.info(f'/get_task_id {task_id} wf.analyze_user_input costs {datetime.now() - t0}')
+    # log.info(res)
     user_input_summary = res['user_input_summary']
     condition = res['condition']
     log.info(f'/get_task_id {task_id} user_input_summary:{user_input_summary}')
     log.info(f'/get_task_id {task_id} condition:{condition}')
 
-    # 求 user_input_summary 和 condition，用 qwen 调用，与 coze workflow 做比较
-    # 两个 thread，并发调用
-    t00 = datetime.now()
-    user_analysis_qwen = llm.analyze_user_input(request.messages, task_id)
-    log.info(f'/get_task_id {task_id} qwen.analyze_user_input costs {datetime.now() - t00}')
-    log.info(f'/get_task_id {task_id} qwen.user_input_summary:{user_analysis_qwen[0]}')
-    log.info(f'/get_task_id {task_id} qwen.condition:{user_analysis_qwen[1]}')
+    # qwen 调用，与 coze workflow 对比。目前保留 coze 方式。
+    # t00 = datetime.now()
+    # model_name = 'qwen-plus'
+    # user_analysis_qwen = llm.analyze_user_input(request.messages, task_id, model_name)
+    # log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
+    # log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{user_analysis_qwen[0]}')
+    # log.info(f'/get_task_id {task_id} {model_name}.condition:{user_analysis_qwen[1]}')
 
+    max_num = request.maxNum
     rerank_top_k = max_num
     retries = 0
     t0 = datetime.now()
@@ -225,9 +228,12 @@ async def get_summary(task_id: str):
 
     data_ready = False
     while datetime.now() - start_time < timeout:
-        tt0 = datetime.now()
+        # tt0 = datetime.now()
         request = SearchEntityEx.query_first(task_id=task_id)
-        log.info(f'/get_summary_result {task_id} query_first costs {datetime.now() - tt0}')
+        #
+        # 上面 tt0 和 下面 log 用于调试并发问题
+        #
+        # log.info(f'/get_summary_result {task_id} query_first costs {datetime.now() - tt0}')
         if request:
             data_ready = True
             break
@@ -260,7 +266,7 @@ async def get_summary(task_id: str):
     # todo 优化这个 prompt
     #
     prompt = f'''
-根据产品信息，简短回答客户问题，不要超过五百字。
+根据产品信息，简短回答客户问题，不要超过五百字。回答文字要平实，不要带文学色彩。要简短，不要啰嗦。
 
 ### 限制
 1. productNum 是产品的唯一标识，必须包含每个产品的 productNum。
@@ -282,23 +288,23 @@ async def get_summary(task_id: str):
             'content': prompt
         }
     ]
-    log.info(f'/get_summary_result {task_id} before calling qwen')
+    model_name = 'qwen-plus'
+    log.info(f'/get_summary_result {task_id} before calling {model_name}')
     cnt = 0
     t0 = datetime.now()
     t1 = t0 # 万一没有第一个 chunk，给 t1 设个初值
-    async for item in llm.stream_generate_ex(messages, task_id, 'get_summary'):
+    async for item in llm.stream_generate_ex(messages, task_id, 'get_summary', model_name):
         cnt += 1
         if cnt == 1:
             t1 = datetime.now()
             log.info(f'/get_summary_result {task_id} first chunk arrived. costs first {t1 - t0}, wait+first {t1 - start_time}')
-        log.info(f'/get_summary_result {task_id} chunk {cnt}')
+        # log.info(f'/get_summary_result {task_id} chunk {cnt}')
         yield item
     t2 = datetime.now()
     log.info(f'/get_summary_result {task_id} all chunks arrived. cost all {t2 - t1}, wait+first+all {t2 - start_time}')
     #
     # todo: res 写到 db 里？
     #
-
 
 async def get_products(task_id: str, timeout_secs: int):
     log.info(f'/get_products_result {task_id} get_products() begins')
@@ -308,9 +314,12 @@ async def get_products(task_id: str, timeout_secs: int):
 
     data_ready = False
     while datetime.now() - start_time < timeout:
-        tt0 = datetime.now()
+        # tt0 = datetime.now()
         products_entity = SearchEntityEx.query_first(task_id=task_id)
-        log.info(f'/get_products_result {task_id} query_first costs {datetime.now() - tt0}')
+        #
+        # 上面 tt0 和 下面 log 用于调试并发问题
+        #
+        # log.info(f'/get_products_result {task_id} query_first costs {datetime.now() - tt0}')
         if products_entity:
             data_ready = True
             break

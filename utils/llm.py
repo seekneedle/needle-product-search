@@ -17,29 +17,26 @@ client = OpenAI(
         base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
     )
 
-def qwen_call(messages, return_type: str, task_id: str, job_name: str):
+def qwen_call(messages, return_type: str, task_id: str, job_name: str, model_name: str):
     # task_id 和 job_name 只用于 logging 目的
-    log.info(f'qwen_call {task_id} {job_name} begins')
+    log.info(f'{model_name} {task_id} {job_name} begins')
     t0 = datetime.now()
     completion = client.chat.completions.create(
         # model='qwen-plus-2024-09-19',
-        model='qwen-plus',
+        model=model_name, #'qwen-plus',
         messages=messages,
         response_format={'type': return_type}
     )
-    log.info(f'qwen_call {task_id} {job_name} done, cost {datetime.now() - t0}')
+    log.info(f'{model_name} {task_id} {job_name} done, cost {datetime.now() - t0}')
     return completion.choices[0].message.content
 
 # 无 log 的版本。（带大量 log 的版本，见本文件下方）
-def qwen_stream_call(messages, queue):
+def qwen_stream_call(messages, queue, model_name: str):
     # task_id 和 job_name 只用于 logging 目的
     completion = client.chat.completions.create(
-        # model='qwen-plus-2024-09-19',
-        # model='qwq-plus',
-        model='qwen-plus',
-        # model='qwen-turbo',
+        model=model_name,
         messages=messages,
-        stream=True, # QwQ 模型仅支持流式输出方式调用
+        stream=True,
         stream_options={'include_usage': False} # 不需要得到 token 使用情况统计
     ) # 貌似是第一个 chunk 返回时才返回
     for chunk in completion:
@@ -51,13 +48,13 @@ def qwen_stream_call(messages, queue):
     queue.put(None)
 
 # wrapper for qwen_stream_call()
-async def stream_generate_ex(messages, task_id: str, job_name: str):
-    log.info(f'qwen_stream_call {task_id} {job_name} WRAPPER before calling qwen')
+async def stream_generate_ex(messages, task_id: str, job_name: str, model_name: str):
+    log.info(f'{model_name} stream_call {task_id} {job_name} WRAPPER before calling qwen')
     queue = multiprocessing.Queue()
-    process = multiprocessing.Process(target=qwen_stream_call, args=(messages, queue))
-    log.info(f'qwen_stream_call {task_id} {job_name} WRAPPER before process.start()')
+    process = multiprocessing.Process(target=qwen_stream_call, args=(messages, queue, model_name))
+    log.info(f'{model_name} stream_call {task_id} {job_name} WRAPPER before process.start()')
     process.start()
-    log.info(f'qwen_stream_call {task_id} {job_name} WRAPPER after process.start()')
+    log.info(f'{model_name} stream_call {task_id} {job_name} WRAPPER after process.start()')
 
     try:
         cnt = 0
@@ -68,7 +65,7 @@ async def stream_generate_ex(messages, task_id: str, job_name: str):
                 queue.get  # 阻塞调用，但通过线程池转为异步
             )
             if cnt == 0:
-                log.info('qwen_stream_call {task_id} {job_name} WRAPPER first chunk received')
+                log.info('{model_name} stream_call {task_id} {job_name} WRAPPER first chunk received')
             cnt += 1
             if data is None: # 结束信号
                 break
@@ -130,9 +127,12 @@ def qwen_stream_call_logs(messages, queue):
     queue.put(None)
 '''
 
-def analyze_user_input(user_messages: list, task_id: str):
+def analyze_user_input(user_messages: list, task_id: str, model_name: str):
     prompt_user_input = f'''
-        根据用户聊天历史，总结用户对于旅行产品的需求并输出。要以用户的口吻输出，不要以客服人员的角度总结。
+        根据用户聊天历史，总结用户对旅行产品的需求。要以用户的口吻输出，不要以客服人员的角度总结。
+        如果总结中涉及到已推荐产品，要带上产品编号，但不要带其标题。
+        如果不涉及已推荐产品，就不用说"目前没有提到具体推荐的产品编号"这样的话。
+        输出文字要平实，不要带文学色彩。要简短，不要啰嗦。
         用户聊天历史记录为：{user_messages}
     '''
 
@@ -167,8 +167,8 @@ def analyze_user_input(user_messages: list, task_id: str):
     messages_condition = [{'role': 'user', 'content': prompt_condition}]
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(qwen_call, messages_user_input, 'text', task_id, 'user_input_summary')  # 提交任务
-        f2 = executor.submit(qwen_call, messages_condition, 'json_object', task_id, 'condition')
+        f1 = executor.submit(qwen_call, messages_user_input, 'text', task_id, 'user_input_summary', model_name)  # 提交任务
+        f2 = executor.submit(qwen_call, messages_condition, 'json_object', task_id, 'condition', model_name)
         res1 = f1.result()
         res2 = f2.result()
 
@@ -176,7 +176,8 @@ def analyze_user_input(user_messages: list, task_id: str):
 
 
 if __name__ == '__main__':
-    messages = [
+    task_id = 'mock_task_id_1234'
+    request_messages = [
         {
             "role": "user",
             "content": "您好，想去新加坡和马来西亚，大概一周时间，父母二人带一个十二岁男孩。有什么推荐吗？"
@@ -190,8 +191,10 @@ if __name__ == '__main__':
             "content": "嗯，我们不希望太累，想轻松点。从北京出发。费用不是问题，至少五万起。要快，本周末之前必须出发。"
         }
     ]
-    t0 = datetime.now()
-    res = analyze_user_input(messages, 'mock_task_id_007')
-    log.info(f'analyze_user_input costs {datetime.now() - t0}')
-    log.info(f'{type(res[0])}, {res[0]}')
-    log.info(f'{type(res[1])}, {res[1]}')
+
+    t00 = datetime.now()
+    model_name = 'qwen-plus'
+    user_analysis_qwen = analyze_user_input(request_messages, task_id, model_name)
+    log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
+    log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{user_analysis_qwen[0]}')
+    log.info(f'/get_task_id {task_id} {model_name}.condition:{user_analysis_qwen[1]}')
