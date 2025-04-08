@@ -135,6 +135,26 @@ def user_input_summary_condition(task_id: str, request_messages):
     log.info(f'/get_task_id {task_id} wf.analyze_user_input costs {datetime.now() - t0}')
     return res
 
+def analyze_user_input_complete(task_id: str, request_messages):
+    log.info(f'/get_task_id {task_id} analyze_user_input before launch')
+    t0 = datetime.now()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(user_input_summary_condition, task_id, request_messages)
+        model_name = 'qwen-turbo'
+        f2 = executor.submit(llm.analyze_user_input, request_messages, task_id, model_name)
+        res = f1.result()
+        res2 = f2.result()
+    log.info(f'/get_task_id {task_id} analyze_user_input costs {datetime.now() - t0}')
+
+    # qwen 调用，与 coze workflow 对比。目前保留 coze 方式。
+    # t00 = datetime.now()
+    # model_name = 'qwen-plus'
+    # user_analysis_qwen = llm.analyze_user_input(request.messages, task_id, model_name)
+    # log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
+    # log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{user_analysis_qwen[0]}')
+    # log.info(f'/get_task_id {task_id} {model_name}.condition:{user_analysis_qwen[1]}')
+    return (res, res2)
+
 def retrieve_product_kb_db(task_id: str, max_num: int, user_input_summary: str, condition):
     env = config['env']
     rerank_top_k = max_num
@@ -145,6 +165,10 @@ def retrieve_product_kb_db(task_id: str, max_num: int, user_input_summary: str, 
         kb_res = coze.search_product_kb(user_input_summary, rerank_top_k, env)
         t2 = datetime.now()
         log.info(f'/get_task_id {task_id} kb.retrieve costs {t2 - t1}')
+        #
+        # todo better logging for kb_res
+        # kb_product_nums = kb_res['product_nums'] if kb_res is not None and
+        log.info(f'/get_task_id {task_id} kb.retrieve result:{kb_res}')
         product_nums = kb_res['product_nums']
         dyna_res = coze.get_dynamic_features(product_nums, env)['products']
         t3 = datetime.now()
@@ -164,37 +188,27 @@ def retrieve_product_kb_db(task_id: str, max_num: int, user_input_summary: str, 
     return (remaining_product_nums, prod_res, dyna_res)
 
 def retrieve_product_db(task_id: str, product_nums: list):
+    log.info(f'/get_task_id {task_id} retrieve_product_db product_nums:{product_nums}')
+    if len(product_nums) == 0:
+        return ([], [])
     env = config['env']
     t0 = datetime.now()
     dyna_res = coze.get_dynamic_features(product_nums, env)['products']
     log.info(f'/get_task_id {task_id} db.get_dynamic_features costs {datetime.now() - t0}')
 
+    # 过滤掉不在 db 里（也就是，不在返回的 dyna_res 里）的 product_num
+    product_nums = list(dyna_res.keys())
+    log.info(f'/get_task_id {task_id} retrieve_product_db final_product_nums:{product_nums}')
+
     t0 = datetime.now()
     prod_res = coze.get_product_features(product_nums, env)['products']
     log.info(f'/get_task_id {task_id} db.get_product_features costs {datetime.now() - t0}')
-    return (prod_res, dyna_res)
+    return (product_nums, prod_res, dyna_res)
 
 def retrieve_products_bg(task_id: str, request):
     log.info(f'/get_task_id {task_id} retrieve_products_bg() begins')
     tx = datetime.now()
-
-    log.info(f'/get_task_id {task_id} analyze_user_input before launch')
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(user_input_summary_condition, task_id, request.messages)
-        model_name = 'qwen-turbo'
-        f2 = executor.submit(llm.analyze_user_input, request.messages, task_id, model_name)
-        res = f1.result()
-        res2 = f2.result()
-    log.info(f'/get_task_id {task_id} analyze_user_input costs {datetime.now() - tx}')
-
-    # qwen 调用，与 coze workflow 对比。目前保留 coze 方式。
-    # t00 = datetime.now()
-    # model_name = 'qwen-plus'
-    # user_analysis_qwen = llm.analyze_user_input(request.messages, task_id, model_name)
-    # log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
-    # log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{user_analysis_qwen[0]}')
-    # log.info(f'/get_task_id {task_id} {model_name}.condition:{user_analysis_qwen[1]}')
-
+    res, res2 = analyze_user_input_complete(task_id, request.messages)
     # 若 workflow.analyze_user_input 返回为 None，说明有内部错误，目前无法处理。
     # 将 user_input_summary, condition, product_infos 都置为空，写入 db，供后续两个调用使用。
     if res is None:
@@ -219,12 +233,17 @@ def retrieve_products_bg(task_id: str, request):
     log.info(f'/get_task_id {task_id} user_intention:{res2[0]}')
 
     if user_intention == 2: # 用户指定某些已推荐产品
-        # 用户点名的，即使有不合适的，也不滤掉，把不合适的原因放在 content 里
+        # 用户点名的，即使有不合适的，也不滤掉。不合适的原因应该会出现在 content 里
+        # 若 analyze_user_input 时识别 product_nums 出错，可能出现 product_num 不在 db 里的情况。
+        #   这种需要滤掉（在 retrieve_product_db 时滤掉的）
         product_nums = res2[0]['product_nums']
-        prod_res, dyna_res = retrieve_product_db(task_id, product_nums)
-    else: # 用户希望推荐更多，或其他
+        product_nums, prod_res, dyna_res = retrieve_product_db(task_id, product_nums)
+        # log.info(f'_____________prod_res type:{type(prod_res)}, _|{prod_res}|_')
+        # log.info(f'_____________dyna_res type:{type(dyna_res)}, _|{dyna_res}|_')
+    else: # 1:用户希望推荐更多，或 0:其他
         product_nums, prod_res, dyna_res = retrieve_product_kb_db(task_id, request.maxNum, user_input_summary, condition)
 
+    log.info(f'/get_task_id {task_id} final product nums:{product_nums}')
     product_infos = [{
         'product_num' : pn,
         'product_feature' : prod_res[pn]['product_feature'],
@@ -284,7 +303,7 @@ coze workflow 的一些逻辑
 async def get_summary(task_id: str):
     log.info(f'/get_summary_result {task_id} get_summary() begins')
     start_time = datetime.now()
-    timeout = timedelta(seconds=120)
+    timeout = timedelta(seconds=60)
     poll_interval = 0.2 # seconds
 
     data_ready = False
@@ -301,8 +320,8 @@ async def get_summary(task_id: str):
         await asyncio.sleep(poll_interval)
 
     waited = datetime.now() - start_time
-    if not data_ready: # timed out
-        log.info(f'/get_summary_result {task_id} timeout costs {waited}')
+    if not data_ready: # 超时：前面 get_task_id 出错了
+        log.info(f'/get_summary_result {task_id} timeout costs {waited}. return.')
         yield 'data: 不好意思，似乎出了些问题，目前没有可以推荐的\n\n'
         return
 
@@ -310,7 +329,7 @@ async def get_summary(task_id: str):
 
     # 从 db 里取出的 user_summary 为空字符串：前面 get_task_id 出错了
     if request.user_input_summary == '':
-        log.info(f'/get_summary_result {task_id} db.user_input_summary empty')
+        log.info(f'/get_summary_result {task_id} db.user_input_summary empty. return.')
         yield 'data: 不好意思，似乎出了些问题，目前没有可以推荐的\n\n'
         return
 
@@ -322,6 +341,16 @@ async def get_summary(task_id: str):
     product_infos = json.loads(request.product_infos)
     # log.info(f'__user_input_summary: {user_input_summary}')
     # log.info(f'__product_infos: {product_infos}')
+    if len(product_infos) == 0:
+        # get_task_id 时，没查到合适的产品。直接返回。
+        # request.product_infos 是空 json 对象序列化成的字符串，其值为 '[]'。
+        # product_infos 则为空 list。用它判断比较方便。
+        # 这里若不返回，后续 full_features 拼接出来为空串。
+        # 再用该空 full_features 以及正常的 user_input_summary 通过 llm 生成 summary，
+        # llm 会产生幻觉，捏造出不存在的 product num。
+        log.info(f'/get_summary_result {task_id} db.product_infos empty. return.')
+        yield 'data: 不好意思，没有查到合适的产品。您可以换个描述再试试。\n\n'
+        return
 
     # todo: 原版计算 summary 时，各产品是按 score 从高到低排序的，
     #       意味着计算 summary 要在 content/score 都算出来之后

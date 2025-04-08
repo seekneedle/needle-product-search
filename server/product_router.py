@@ -131,7 +131,7 @@ async def get_summary_result(request: Request, task_request: TaskRequest):
 async def get_products_result(
     task_id: str,
     max_retries: int = 60,
-    retry_delay: int = 3  # 默认 3 秒
+    retry_delay: int = 1  # 默认 1 秒
 ):
     log.info(f'/get_products_result {task_id} api request received')
     t0 = datetime.now()

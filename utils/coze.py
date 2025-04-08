@@ -1,3 +1,7 @@
+import sys, pathlib
+sys.path.append(str(pathlib.Path(__file__).parent.parent))  # 将项目根目录添加到 Python 路径
+############# 以上两行在单独测试本文件时加上
+
 import requests
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
@@ -17,9 +21,6 @@ from utils.log import log
 #
 
 def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
-    # user_input_summary = args.input.user_input_summary # 检索字符串（用户需求总结）
-    # rerank_top_k = args.input.top_k # 知识库返回最相似片段数量
-    # env = args.input.env
     env = 'uat' # 暂时 hard code
     if env == 'prod':
         url = "http://8.152.213.191:8471/vector_store/retrieve"
@@ -38,11 +39,9 @@ def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
         "query": user_input_summary,
         "min_score": 0
     }
-    if rerank_top_k is not None:
-        rerank_top_k = int(rerank_top_k)
-        data["rerank_top_k"] = rerank_top_k
-        data["top_k"] = rerank_top_k * 2
-        data["sparse_top_k"] = rerank_top_k * 2
+    data["rerank_top_k"] = rerank_top_k
+    data["top_k"] = rerank_top_k * 2
+    data["sparse_top_k"] = rerank_top_k * 2
     response = requests.post(url, headers=headers, json=data)
     product_nums = []
     products = []
@@ -150,6 +149,8 @@ def get_dynamic_feature(product_num: str, env: str):
     try:
         product_features = [f"productNum：{product_num}"]
         data = requests.get(url).json()['data']
+        if data is None:
+            return {}
         lines = data["lineList"]
         cals = []
         for line in lines:
@@ -167,7 +168,7 @@ def get_dynamic_feature(product_num: str, env: str):
                     product_features.append(get_feature_desc(cal, "存量", 'stock'))
         product_feature_str = '\n'.join(product_features)
     except Exception:
-        return {"cals": []}
+        return {}
     return {"cals": cals, "product_num": product_num, "product_feature": product_feature_str}
 
 
@@ -180,6 +181,8 @@ def get_product_feature(product_num: str, env: str):
         url = f"https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}"
     try:
         product_detail = requests.get(url).json()['data']
+        if product_detail is None:
+            return {}
         product_features = [f"productNum：{product_num}"]
         product_features.append(get_feature_desc(product_detail, "参团游类型", 'productGroupTypeName'))
         product_features.append(get_feature_desc(product_detail, "产品类别", 'productTypeName'))
@@ -266,8 +269,9 @@ def batch_features(product_nums: list, env: str, func):
         for f in as_completed(futures):
             try:
                 feature = f.result()
-                prod_num = futures[f]
-                products[prod_num] = feature
+                if feature: # 若不是空 dict
+                    prod_num = futures[f]
+                    products[prod_num] = feature
             except Exception as e:
                 trace_info = traceback.format_exc()
                 info = f'Exception for batch_features, e:{e}, prod_num:{futures[f]}, trace: {trace_info}'
@@ -380,8 +384,6 @@ def validate_cal(cal, condition):
         return False, info
 
 def filter_dynamic(condition, products):
-    # condition = args.input.condition
-    # products = args.input.products
     product_nums = []
     # print(f'__filter dynamic: products:{products}')
     for pn, product in products.items():
@@ -397,6 +399,11 @@ def filter_dynamic(condition, products):
 
 if __name__ == '__main__':
     env = 'uat'
+
+    product_nums = ['1', '2', 'U167657']
+    res = get_dynamic_features(product_nums, env)
+    log.info(f'\n\nres: {res}')
+    sys.exit(0)
 
     user_input_summary = '用户需求：为父母二人带一个 12 岁男孩规划一个新加坡周末两天的旅行产品。'
     rerank_top_k = 5
