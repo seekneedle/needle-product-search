@@ -88,7 +88,7 @@ async def product_question_api(request: ProductQuestionRequest):
 # 5. 发起异步产品检索
 @store_router.post('/request_product_search')
 async def request_product_search(request: ProductSearchRequest):
-    log.info(f'/request_product_search received request:{request}')
+    log.info(f'/request_product_search api request received {request}')
     t0 = datetime.now()
     task_id = get_task_id(request)
     log.info(f'/request_product_search {task_id} costs {datetime.now() - t0}')

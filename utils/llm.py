@@ -2,15 +2,16 @@ import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).parent.parent)) # 将项目根目录添加到 Python 路径
 ############# 以上两行在单独测试本文件时加上
 
-from openai import OpenAI
+from openai import OpenAI, APIError
 from utils.security import decrypt
 from utils.config import config
 from utils.log import log
 import multiprocessing
 import asyncio
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import traceback
 
 client = OpenAI(
         api_key=decrypt(config['api_key']),
@@ -21,13 +22,20 @@ def qwen_call(messages, return_type: str, task_id: str, job_name: str, model_nam
     # task_id 和 job_name 只用于 logging 目的
     log.info(f'{model_name} {task_id} {job_name} begins')
     t0 = datetime.now()
-    completion = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        response_format={'type': return_type}
-    )
-    log.info(f'{model_name} {task_id} {job_name} done, cost {datetime.now() - t0}')
-    return completion.choices[0].message.content
+    try:
+        completion = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            response_format={'type': return_type}
+        )
+        log.info(f'{model_name} {task_id} {job_name} done, cost {datetime.now() - t0}')
+        return completion.choices[0].message.content
+    except APIError as e:
+        log.info(f'{model_name} {task_id} {job_name} APIError: {e.status_code}, {e.code}, {e.message}')
+        return ''
+    except Exception as e:  # 其他异常（如网络问题）
+        log.info(f'{model_name} {task_id} {job_name} api Exception: {str(e)}')
+        return ''
 
 # 无 log 的版本。（带大量 log 的版本，见本文件下方）
 def qwen_stream_call(messages, queue, model_name: str):
@@ -129,37 +137,43 @@ def qwen_stream_call_logs(messages, queue):
 #
 # 目前只用到了 user_intention
 #
-def analyze_user_input(user_messages: list, task_id: str, model_name: str):
+def analyze_user_input(recent_messages: list, task_id: str):
     prompt_user_input = f'''
         根据用户聊天历史，总结用户对旅行产品的需求。要以用户的口吻输出，不要以客服人员的角度总结。
         如果总结中涉及到已推荐产品，要带上产品编号，但不要带其标题。
         如果不涉及已推荐产品，就不用说"目前没有提到具体推荐的产品编号"这样的话。
         输出文字要平实，不要带文学色彩。要简短，不要啰嗦。
-        用户聊天历史记录为：{user_messages}
+        用户聊天历史记录为：{recent_messages}
     '''
 
-    recent_messages = user_messages[-11:]
     prompt_condition = f'''
         ### 角色
         根据客户user的聊天历史，总结客户对于出行时间、产品价格、产品存量的需求，放到 json 对象中，结构化返回。
 
+        注意，提取各种时间时，
+
         ### 能力1：提取产品出行时间要求
-        1. 根据聊天历史，提取客户希望的出发时间到depart_date，如果没有提及出发时间，则输出空。
-        2. 根据聊天历史，提取客户希望的返回时间到back_date，如果没有提及返回时间，则输出空。
-        3. 提取格式为yyyy-MM-dd，比如：2025-06-29。
+        1. 根据聊天历史，提取客户希望的出发时间到 depart_date，如果没有提及出发时间，则输出空。
+        2. 根据聊天历史，提取客户希望的返回时间到 back_date，如果没有提及返回时间，则输出空。
+        3. 提取格式为 yyyy-MM-dd，比如：2025-06-29。
+        4. 如果用户提到的日期没说是哪年，则认为是今年。若没说是几月，则认为是这个月。
 
-        ### 能力2： 提取产品存量要求
-        1. 根据聊天历史，提取客户要求的最少存量，存量不能小于1。
-        2. 如果用户没有提及最小存量，默认为1.
-        3. 输出存量要求必须是整数。
+        ### 能力2：提取产品的时长
+        1. 根据聊天历史，提取客户要求的最少旅游多少天，放到 min_days。若未提及，则输出 0
+        2. 根据聊天历史，提取客户要求的最多旅游多少天。如果 max_days。若未提及，则输出 0
 
-        ### 能力3： 提取产品价格要求
-        1. 根据聊天历史，提取客户要求的最低价格，如果没有提及最低价格，则最低价格输出0。
-        2. 根据聊天历史，提取客户要求的最高价格，如果没有提起最高价格，则最高价格输出空。
+        ### 能力3：提取产品存量要求
+        1. 根据聊天历史，提取客户要求的最少存量，放入 stock 里。存量不能小于 1。
+        2. 如果用户没有提及最小存量，默认为 1。
+        3. 输出存量必须是整数。
+
+        ### 能力4：提取产品价格要求
+        1. 根据聊天历史，提取客户要求的最低价格，放到 min_price 里。如果没有提及最低价格，则最低价格输出0。
+        2. 根据聊天历史，提取客户要求的最高价格，放到 max_price 里。如果没有提及最高价格，则最高价格输出空。
 
         ### 限制
         1. 不允许编造内容。
-        2. 必须严格按照客户聊天历史中的信息进行提取。
+        2. 必须严格按客户聊天历史中的信息进行提取。
 
         ### 用户聊天历史
 
@@ -172,24 +186,143 @@ def analyze_user_input(user_messages: list, task_id: str, model_name: str):
         如果用户表示出对某个或某几个产品的肯定，或进一步询问已推荐的一个或几个产品的详细信息（如出发日期、价格、特点等），或想对比几个已推荐产品的某些特点，返回 intention = 2，并将用户指定的诸产品放入 product_nums 列表中。
         如果是其他意图，返回 intention = 0。
         并将理由放在 reason 中。
-        用户聊天历史记录为：{user_messages}
+        用户聊天历史记录为：{recent_messages}
+    '''
+
+    prompt_user_summary_intention = f'''
+        根据用户聊天历史，总结用户对旅行产品的需求，并判断用户的意图。
+        结果放到 json 对象中，结构化返回。
+
+        关于用户的需求总结：
+        要以用户的口吻输出，不要以客服人员的角度总结。结果放在 input_summary 中。
+        如果总结中涉及到已推荐产品，要带上产品编号，但不要带其标题。
+        如果不涉及已推荐产品，就不用说"目前没有提到具体推荐的产品编号"这样的话。
+        输出文字要平实，不要带文学色彩。要简短，不要啰嗦。
+
+        关于用户的意图：
+        如果用户感觉以前系统推荐的产品不太合适、或者不够多，希望再推荐些其他产品，返回 intention = 1。
+        如果用户表示出对某个或某几个产品的肯定，或进一步询问已推荐的一个或几个产品的详细信息（如出发日期、价格、特点等），或想对比几个已推荐产品的某些特点，返回 intention = 2，并将用户指定的各产品放入 product_nums 列表中。
+        如果是其他意图，返回 intention = 0。
+        并将理由放在 reason 中。
+
+        用户聊天历史记录为：{recent_messages}
     '''
 
     messages_user_input = [{'role': 'user', 'content': prompt_user_input}]
     messages_condition = [{'role': 'user', 'content': prompt_condition}]
     messages_user_intention = [{'role': 'user', 'content': prompt_user_intention}]
+    messages_user_summary_intention = [{'role': 'user', 'content': prompt_user_summary_intention}]
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        # f1 = executor.submit(qwen_call, messages_user_input, 'text', task_id, 'user_input_summary', model_name)  # 提交任务
-        # f2 = executor.submit(qwen_call, messages_condition, 'json_object', task_id, 'condition', model_name)
-        f3 = executor.submit(qwen_call, messages_user_intention, 'json_object', task_id, 'user_intention', model_name)
-        # res1 = f1.result()
-        # res2 = f2.result()
-        res3 = f3.result()
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        f1 = executor.submit(qwen_call, messages_user_input, 'text', task_id, 'user_input_summary', 'qwen-plus')  # 提交任务
+        f2 = executor.submit(qwen_call, messages_condition, 'json_object', task_id, 'condition', 'qwen-turbo')
+        f3 = executor.submit(qwen_call, messages_user_intention, 'json_object', task_id, 'user_intention', 'qwen-plus')
+        f4 = executor.submit(qwen_call, messages_user_summary_intention, 'json_object', task_id, 'user_summary_intention', 'qwen-plus')
 
-    return (json.loads(res3),)
-    # return (res1, json.loads(res2), json.loads(res3))
+    user_input_summary = f1.result()
+    condition = json.loads(f2.result())
+    user_intention = json.loads(f3.result())
+    user_summary_intention = json.loads(f4.result())
 
+    # 意图识别时，如果没正面提到某些产品，可能没有 product_nums 字段。补一个，以防不测。
+    if 'product_nums' not in user_intention:
+        user_intention['product_nums'] = []
+    if 'product_nums' not in user_summary_intention:
+        user_summary_intention['product_nums'] = []
+
+    log.info(f'__ condition before adjust: {condition}')
+    # qwen-plus 和 qwen-turbo 似乎都认为今年是 2023 年。临时解决方法：year += 2。注意 2024 是闰年。
+    leap_date = datetime(year=2024, month=2, day=29)
+    if condition['depart_date'] != '':
+        depart_date = datetime.strptime(condition['depart_date'], '%Y-%m-%d')
+        if depart_date.year < datetime.now().year:
+            delta = 365 + 366 if depart_date < leap_date else 365 * 2
+            condition['depart_date'] = (depart_date + timedelta(days=delta)).strftime('%Y-%m-%d')
+
+    if condition['back_date'] != '':
+        back_date = datetime.strptime(condition['back_date'], '%Y-%m-%d')
+        if back_date.year < datetime.now().year:
+            delta = 365 + 366 if back_date < leap_date else 365 * 2
+            condition['back_date'] = (back_date + timedelta(days=delta)).strftime('%Y-%m-%d')
+
+    return user_input_summary, condition, user_intention, user_summary_intention
+
+def to_match_prompt(recent_messages, feature: str) -> list:
+    # 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
+    prompt = f'''
+        根据用户的对话历史，看给定的一个产品描述是否满足用户的旅游需求。结果放到 json 对象中，结构化返回。
+        是否满足需求，放到 matched 变量中；原因，放到 reason 变量中。
+        用户的对话历史：{recent_messages}
+        旅游产品描述如下，只是一个产品：{feature}
+    '''
+    llm_messages = [{'role': 'user', 'content': prompt}]
+    return llm_messages
+
+def check_products_matched(recent_messages, full_features, task_id: str, model_name: str):
+    if len(full_features) == 0:
+        return []
+
+    matched_product_nums = []
+    with ThreadPoolExecutor(max_workers=len(full_features)) as executor:
+        futures = {executor.submit(
+            qwen_call, to_match_prompt(recent_messages, feature),
+            'json_object', task_id, f'{pn} if_matched', model_name
+        ): pn for pn, feature in full_features}
+
+        for f in as_completed(futures):
+            try:
+                if f.result() == '': # 出错，只能跳过，无其他办法
+                    log.info(f'check_products_matched {task_id} skipped.')
+                    continue
+                res = json.loads(f.result())
+                log.info(f'{model_name} {task_id} if_matched result:{res}')
+                if res['matched']:
+                    matched_product_nums.append(futures[f])
+            except Exception as e:
+                trace_info = traceback.format_exc()
+                info = f'Exception for batch_features, e:{e}, prod_num:{futures[f]}, trace: {trace_info}'
+                print(f'__exception: {info}')
+    return matched_product_nums
+
+def to_content_prompt(recent_messages, feature: str) -> list:
+    # 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
+    prompt = f'''
+        根据产品信息，结合用户聊天历史中的需求，给出该产品的推荐理由、产品与用户需求的相似度分数。
+        结果放到 json 对象中，结构化返回。
+        推荐理由输出到 content。相似度分数输出到 score，最高 100 分。
+        已知该产品与用户需求比较相符，所以请着重给出亮点。
+        即使你认为它不太符合用户需求，也不要直接说它不合适，而是要用"虽然它不完全匹配，但也比较相关"这样的话术。
+        用户的对话历史：{recent_messages}
+        旅游产品信息：{feature}
+    '''
+    llm_messages = [{'role': 'user', 'content': prompt}]
+    return llm_messages
+
+def get_product_contents(recent_messages, prod_infos, task_id: str, model_name: str):
+    if len(prod_infos) == 0:
+        return []
+    res_contents = []
+    with ThreadPoolExecutor(max_workers=len(prod_infos)) as executor:
+        futures = {executor.submit(
+            qwen_call, to_content_prompt(recent_messages, p['full_feature']),
+            'json_object', task_id, f"{p['product_num']} content", model_name
+        ): p['product_num'] for p in prod_infos}
+
+        for f in as_completed(futures):
+            product_num = futures[f]
+            try:
+                if f.result() == '': # 出错，只能跳过，无其他办法
+                    log.info(f'get_product_content {task_id} {product_num} skipped.')
+                    continue
+                res = json.loads(f.result())
+                res['product_num'] = product_num
+                log.info(f'{model_name} {task_id} {product_num} content:{res}')
+                res_contents.append(res)
+            except Exception as e:
+                trace_info = traceback.format_exc()
+                info = f'Exception for batch_features, e:{e}, prod_num:{futures[f]}, trace: {trace_info}'
+                print(f'__exception: {info}')
+    return res_contents
 
 if __name__ == '__main__':
     task_id = 'mock_task_id_1234'
@@ -209,10 +342,23 @@ if __name__ == '__main__':
         }
     ]
 
-    t00 = datetime.now()
-    model_name = 'qwen-plus'
-    user_analysis_qwen = analyze_user_input(request_messages, task_id, model_name)
-    log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
-    # log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{user_analysis_qwen[0]}')
-    # log.info(f'/get_task_id {task_id} {model_name}.condition:{user_analysis_qwen[1]}')
-    log.info(f'/get_task_id {task_id} {model_name}.intention:{user_analysis_qwen[0]}')
+    # dates = [ '一周', '半个月', '三五天', '十天半个月', '七八天', '10天', '3天', ]
+    # dates = [ '今年暑假', '明年春节', '国庆', '五一', '劳动节', '下周', '今年开斋节', ]
+    dates = ['五一']
+
+    for d in dates:
+        log.info(f'_{d}_')
+        request_messages = [
+            {
+                "role": "user",
+                "content": f"您好，想{d}期间去欧洲，主要是英法德意这几个国家。想玩十天左右"
+            },
+        ]
+
+        t00 = datetime.now()
+        model_name = 'qwen-plus'
+        user_analysis_qwen = analyze_user_input(request_messages, task_id, model_name)
+        log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
+        log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{user_analysis_qwen[0]}')
+        log.info(f'/get_task_id {task_id} {model_name}.condition:{user_analysis_qwen[1]}')
+        log.info(f'/get_task_id {task_id} {model_name}.intention:{user_analysis_qwen[2]}')

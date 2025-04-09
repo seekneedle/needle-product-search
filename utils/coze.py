@@ -73,7 +73,7 @@ def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
 #     return False
 
 def field_valid(d: dict, key: str) -> bool:
-    return key in d and d[key] != ""
+    return key in d and d[key] != ''
 
 def get_field_str(d: dict, key: str) -> str:
     return str(d[key]) if field_valid(d, key) else ''
@@ -142,6 +142,7 @@ def get_feature_desc(product_detail, intro, parent_key, keys=None):
         return f"{intro}："
 
 def get_dynamic_feature(product_num: str, env: str):
+    # log.info('_________get dynamic fature_________')
     if env == 'uat':
         url = f"https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}"
     else:
@@ -154,23 +155,28 @@ def get_dynamic_feature(product_num: str, env: str):
         lines = data["lineList"]
         cals = []
         for line in lines:
+            trip_days_str = get_field_str(line, 'tripDays') # 原为 int 类型
+            trip_nights_str = get_field_str(line, 'tripNight') # 原为 int 类型
             for cal in line["calList"]:
                 if cal['isOpen'] == 1:
                     out_cal = {}
                     out_cal["price"] = get_field_str(cal, 'adultSalePrice') # 原为 float 类型
                     out_cal["depart_date"] = cal['departDate']
                     out_cal["back_date"] = cal['calBackDate']
+                    out_cal['trip_days'] = trip_days_str
+                    out_cal['trip_nights'] = trip_nights_str
                     out_cal["stock"] = get_field_str(cal, 'stock') # 原为 int 类型
                     cals.append(out_cal)
                     product_features.append(get_feature_desc(cal, "成人售价", 'adultSalePrice'))
                     product_features.append(get_feature_desc(cal, "出发日期", 'departDate'))
                     product_features.append(get_feature_desc(cal, "返回日期", 'calBackDate'))
+                    # product_features.append(get_feature_desc(cal, "旅行天数", 'tripDays'))
+                    # product_features.append(get_feature_desc(cal, "旅行夜数", 'tripNight'))
                     product_features.append(get_feature_desc(cal, "存量", 'stock'))
         product_feature_str = '\n'.join(product_features)
     except Exception:
         return {}
     return {"cals": cals, "product_num": product_num, "product_feature": product_feature_str}
-
 
 ####
 
@@ -324,6 +330,7 @@ def validate_cal(cal, condition):
 
     返回: bool: 如果 cal 符合 condition，则返回 True；否则返回 False。
     """
+    log.info(f'________ validate_cal(): cal:{cal}, condition:{condition}')
     try:
         # 检查价格是否在范围内
         if field_valid(cal, 'price'):
@@ -338,6 +345,7 @@ def validate_cal(cal, condition):
                 if max_price < price:
                     return False
 
+        log.info('__________________________ will handle dates')
         # 检查出发日期和返回日期是否与条件中的日期有交集
         if field_valid(cal, 'depart_date') and (field_valid(condition, 'depart_date') or field_valid(condition, 'back_date')):
             # 将字符串日期转换为 datetime 对象
@@ -347,19 +355,56 @@ def validate_cal(cal, condition):
             condition_depart_date = datetime.strptime(condition['depart_date'], "%Y-%m-%d") if field_valid(condition, 'depart_date') else None
             condition_back_date = datetime.strptime(condition['back_date'], "%Y-%m-%d") if field_valid(condition, 'back_date') else None
 
-            # 条件出发时间比可选出发时间早超过7天
-            if condition_depart_date and condition_depart_date < cal_depart_date:
-                return False
+            log.info(f'____ cal_depart_date: {cal_depart_date}')
+            log.info(f'____   cal_back_date: {cal_back_date}')
+            log.info(f'____cond_depart_date: {condition_depart_date}')
+            log.info(f'____  cond_back_date: {condition_back_date}')
 
-            # 条件返回时间比可选出发时间早超过7天
-            if condition_back_date and condition_back_date <= cal_depart_date:
+            log.info('____________ will handle depart date')
+            # 条件出发时间比可选出发时间相差超过7天
+            if condition_depart_date and cal_depart_date and abs(condition_depart_date - cal_depart_date) >= timedelta(days=7):
+                log.info('       false')
                 return False
+            else:
+                log.info('       true')
 
+            log.info('________________ will handle ')
+            # 条件返回时间比可选出发时间相差超过7天
+            if condition_back_date and cal_back_date and abs(condition_back_date - cal_back_date) >= timedelta(days=7):
+                log.info('         false')
+                return False
+            else:
+                log.info('          true')
+
+
+        log.info('____________ will handle depart_date alone vs. today')
         if field_valid(cal, 'depart_date'):
             cal_depart_date = datetime.strptime(cal['depart_date'], "%Y-%m-%d")
+            log.info(f'____ cal_depart_date: {cal_depart_date}')
+            log.info(f'____      cond_today: {datetime.today()}')
             # 如果 cal_depart_date 比今天早，返回 False
             if cal_depart_date < datetime.today():
                 return False
+
+        log.info('______________________________ dates ok _________________')
+
+
+        log.info('_________________ check days _____________')
+        # 检查旅行时长是否符合。不用太精确，最多允许前后相差 4 天。
+        if field_valid(cal, 'trip_days'):
+            days_cal = int(cal['trip_days'])
+            log.info(f'    days_cal: {days_cal}')
+            if field_valid(condition, 'max_days'):
+                max_days_condition = int(condition['max_days'])
+                log.info(f'    max_days_condition: {max_days_condition}')
+                if max_days_condition != 0 and abs(max_days_condition - days_cal) >= 4:
+                    return False
+            if field_valid(condition, 'max_days'):
+                min_days_condition = int(condition['min_days'])
+                log.info(f'    min_days_condition: {min_days_condition}')
+                if min_days_condition != 0 and (min_days_condition - days_cal) >= 4:
+                    return False
+        log.info('___________________ days ok ________________')
 
         # 检查存量是否满足最低要求
         if field_valid(condition, 'stock') and field_valid(cal, 'stock'):
@@ -400,32 +445,26 @@ def filter_dynamic(condition, products):
 if __name__ == '__main__':
     env = 'uat'
 
-    product_nums = ['1', '2', 'U167657']
-    res = get_dynamic_features(product_nums, env)
-    log.info(f'\n\nres: {res}')
-    sys.exit(0)
+    # product_nums = ['1', '2', 'U167657']
+    # res = get_dynamic_features(product_nums, env)
+    # log.info(f'\n\nres: {res}')
+    # sys.exit(0)
 
-    user_input_summary = '用户需求：为父母二人带一个 12 岁男孩规划一个新加坡周末两天的旅行产品。'
-    rerank_top_k = 5
-    kb_res = search_product_kb(user_input_summary, rerank_top_k, env)
-    print(kb_res)
-    print(json.dumps(kb_res, indent=4))
-    print('_' * 40)
-
-    # product_num = 'U167127'
-    # ans = get_dynamic_feature(product_num, env)
-    # print(ans)
-    # print(json.dumps(ans, indent=4))
+    # user_input_summary = '想五一期间去澳大利亚和新西兰转转，别太累，别自驾'
+    # rerank_top_k = 5
+    # kb_res = search_product_kb(user_input_summary, rerank_top_k, env)
+    # print(kb_res)
+    # print(json.dumps(kb_res, indent=4))
     # print('_' * 40)
-
-    product_nums = kb_res['product_nums']
-    # [
-    #     "U182795",
-    #     "U176847",
-    #     "U174845",
-    #     "U181428",
-    #     "U184243"
-    # ]
+    #
+    # product_nums = kb_res['product_nums']
+    product_nums = [
+        "U182795",
+        # "U176847",
+        # "U174845",
+        # "U181428",
+        # "U184243"
+    ]
     ans = get_dynamic_features(product_nums, env)
     print(ans)
     print(json.dumps(ans, indent=4))
@@ -437,6 +476,6 @@ if __name__ == '__main__':
     print('_' * 40)
     sys.exit(0)
 
-    from filter_dynamic_test_data import condition, products
-    ans = filter_dynamic(condition, products)
-    print(ans)
+    # from filter_dynamic_test_data import condition, products
+    # ans = filter_dynamic(condition, products)
+    # print(ans)
