@@ -216,9 +216,9 @@ def analyze_user_input(recent_messages: list, task_id: str, model_name: str):
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         # f1 = executor.submit(qwen_call, messages_user_input, 'text', task_id, 'user_input_summary', model_name)  # 提交任务
-        f2 = executor.submit(qwen_call, messages_condition, 'json_object', task_id, 'condition', 'qwen-turbo')
+        f2 = executor.submit(qwen_call, messages_condition, 'json_object', task_id, 'condition', config['model_user_condition'])
         # f3 = executor.submit(qwen_call, messages_user_intention, 'json_object', task_id, 'user_intention', model_name)
-        f4 = executor.submit(qwen_call, messages_user_summary_intention, 'json_object', task_id, 'user_summary_intention', model_name)
+        f4 = executor.submit(qwen_call, messages_user_summary_intention, 'json_object', task_id, 'user_summary_intention', config['model_user_summary_intention'])
 
     # user_input_summary = f1.result()
     condition = json.loads(f2.result())

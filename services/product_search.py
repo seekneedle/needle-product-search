@@ -216,10 +216,10 @@ def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_in
             prod_res = coze.get_product_features(product_nums_2, env)['products']
             log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} db.get_product_features costs {datetime.now() - t4}')
 
-            # step 5. filter by llm_content
+            # step 5. filter by llm_check_products_matched
             full_features = [(pn, prod_res[pn]['product_feature'] + '\n' + dyna_res[pn]['product_feature']) for pn in product_nums_2]
             t5 = datetime.now()
-            model_name = 'qwen-turbo'
+            model_name = config['model_product_matched']
             product_nums_3 = llm.check_products_matched(recent_messages, full_features, task_id, model_name)
             log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} {model_name} filter_llm_matched costs {datetime.now() - t5}')
             log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} {model_name} after filter_llm_matched: {product_nums_3}')
@@ -265,7 +265,7 @@ def retrieve_products_bg(task_id: str, request):
     log.info(f'/get_task_id {task_id} retrieve_products_bg() begins')
     tx = datetime.now()
     recent_messages = request.messages[-11:]
-    condition, user_summary_intention = llm.analyze_user_input(recent_messages, task_id, 'qwen-plus')
+    condition, user_summary_intention = llm.analyze_user_input(recent_messages, task_id, config['model_user_summary_intention'])
     log.info(f'/get_task_id {task_id} condition:{condition}')
     log.info(f'/get_task_id {task_id} user_summary_intention:{user_summary_intention}')
 
@@ -405,7 +405,7 @@ async def get_summary(task_id: str):
 不要超过五百字。回答文字要平实，不要带文学色彩。要简短，不要啰嗦。
 
 ### 限制
-1. productNum 是产品的唯一标识，必须包含每个产品的 productNum。
+1. productNum 是产品的唯一标识，标题是产品的重要特征。必须包含每个产品的 productNum 和标题。
 2. 只要提及产品，无论之前是否出现过，都要重新给出产品的 productNum。
 3. 但不要出现 "productNum" 这个英文词，要用"编号为某某的产品"这样的方式。
 4. 即使某产品不太符合用户需求，也不要直接说它不合适，而是要用类似"虽然它不完全匹配，但也比较相关"这样的话术。
@@ -425,7 +425,7 @@ async def get_summary(task_id: str):
             'content': prompt
         }
     ]
-    model_name = 'qwen-turbo'
+    model_name = config['model_summary']
     log.info(f'/get_summary_result {task_id} before calling {model_name}')
     cnt = 0
     t0 = datetime.now()
@@ -458,10 +458,6 @@ async def get_summary(task_id: str):
     # t2 = datetime.now()
     # log.info(f'/get_summary_result {task_id} {model_name} all chunks arrived. cost all {t2 - t1}, wait+first+all {t2 - start_time}')
     # log.info(f'/get_summary_result {task_id} {model_name} summary: {buffer}')
-
-    #
-    # todo: res 写到 db 里？
-    #
 
 async def get_products(task_id: str, timeout_secs: int):
     log.info(f'/get_products_result {task_id} get_products() begins')
@@ -497,18 +493,17 @@ async def get_products(task_id: str, timeout_secs: int):
     recent_messages = json.loads(search_entity.messages)[-11:]
 
     t0 = datetime.now()
-    model_name = 'qwen-turbo'
+    model_name = config['model_content']
     res_contents = llm.get_product_contents(recent_messages, prod_infos, task_id, model_name)
     log.info(f'/get_products_result {task_id} {model_name} llm.get_contents costs {datetime.now() - t0}')
     log.info(f'/get_products_result {task_id} {model_name} llm.get_contents result {res_contents}')
-    log.info(f'_______________ res_cont_ents from llm {model_name}, before sorting _{res_contents}')
+    log.info(f'_______________ res_contents from llm {model_name}, before sorting _{res_contents}')
     # res_contents 中每一项有三个字段：content, score, product_num
     products_sorted = sorted(res_contents, key=lambda p: -p['score'])
     log.info(f'/get_products_result {task_id} get_contents costs {datetime.now() - t0}')
     log.info(f'/get_products_result {task_id} get_contents result {products_sorted}')
 
     return ProductsResponse(products=products_sorted)
-    # return ProductsResponse(products=res_3d)
 
     # product_nums = [p['product_num'] for p in prod_infos]
     # full_features = [p['product_feature'] + '\n' + p['dynamic_feature'] for p in prod_infos]
@@ -524,7 +519,6 @@ async def get_products(task_id: str, timeout_secs: int):
     # res = await coze_workflow_async(wf_id_name, params)
     # if res is None:
     #     return ProductsResponse(products=[])
-    # log.info(f'_______________ res_cont_ents from llm {model_name}, before sorting _{res_contents}')
     # # res['products'] 中每一项有三个字段：content, score, product_num
     # products_sorted = sorted(res['products'], key=lambda p: -p['score'])
 

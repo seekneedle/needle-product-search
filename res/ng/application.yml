@@ -35,6 +35,13 @@ coze_product_search_content_wf_id: "7488632530797084711" # single
 coze_product_compare_wf_id: "7462301883848704027"
 coze_product_feature_wf_id: "7478322545244094503"
 coze_product_questions_wf_id: "7479732260448632867"
+
+model_summary: 'qwen-turbo'
+model_content: 'qwen-plus'
+model_user_condition: 'qwen-turbo'
+model_user_summary_intention: 'qwen-plus'
+model_product_matched: 'qwen-turbo'
+
 kb_id: icmp3tfyk6
 # uux_url: mapi.uuxlink.com
 uux_url: mapi.uuxlink.com
