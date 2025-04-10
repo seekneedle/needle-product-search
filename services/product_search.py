@@ -186,7 +186,7 @@ def retrieve_products_kb_db_orig(task_id: str, max_num: int, recent_messages, us
 
 def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_input_summary: str, condition):
     env = config['env']
-    rerank_top_k = max_num
+    rerank_top_k = max_num * 2
     retries = 0
     t0 = datetime.now()
     product_nums_bad = set() # 曾经被过滤掉的 product_num 们
@@ -218,12 +218,6 @@ def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_in
 
             # step 5. filter by llm_content
             full_features = [(pn, prod_res[pn]['product_feature'] + '\n' + dyna_res[pn]['product_feature']) for pn in product_nums_2]
-            t5 = datetime.now()
-            model_name = 'qwen-plus'
-            product_nums_3 = llm.check_products_matched(recent_messages, full_features, task_id, model_name)
-            log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} {model_name} filter_llm_matched costs {datetime.now() - t5}')
-            log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} {model_name} after filter_llm_matched: {product_nums_3}')
-
             t5 = datetime.now()
             model_name = 'qwen-turbo'
             product_nums_3 = llm.check_products_matched(recent_messages, full_features, task_id, model_name)
@@ -271,60 +265,33 @@ def retrieve_products_bg(task_id: str, request):
     log.info(f'/get_task_id {task_id} retrieve_products_bg() begins')
     tx = datetime.now()
     recent_messages = request.messages[-11:]
-    user_input_summary, condition, intention, summary_intention = llm.analyze_user_input(recent_messages, task_id)
-    log.info(f'/get_task_id {task_id} user_input_summary:{user_input_summary}')
+    condition, user_summary_intention = llm.analyze_user_input(recent_messages, task_id, 'qwen-plus')
     log.info(f'/get_task_id {task_id} condition:{condition}')
-    log.info(f'/get_task_id {task_id} user_intention:{intention}')
-    log.info(f'/get_task_id {task_id} user_summary_intention:{summary_intention}')
-    # user_intention = intention['user_intention']
+    log.info(f'/get_task_id {task_id} user_summary_intention:{user_summary_intention}')
 
+    user_input_summary = user_summary_intention['input_summary']
+    user_intention = user_summary_intention['intention']
 
-    # # 若 workflow.analyze_user_input 返回为 None，说明有内部错误，目前无法处理。
-    # # 将 user_input_summary, condition, product_infos 都置为空，写入 db，供后续两个调用使用。
-    # if res is None:
-    #     log.info(f'/get_task_id {task_id} wf.analyze_user_input result None')
-    #     SearchEntityExx.create(
-    #         task_id=task_id,
-    #         max_num=0,
-    #         messages=json.dumps(request.messages, ensure_ascii=False, indent=4),
-    #         user_input_summary='',
-    #         condition='',
-    #         user_intention=0,
-    #         product_infos=''
-    #     )
-    #     log.info(f'/get_task_id {task_id} retrieve_products_bg() total costs {datetime.now() - tx}')
-    #     return
-
-    # user_input_summary = res['user_input_summary']
-    # condition = res['condition']
-    # user_intention = res2[0]['intention']
-
-    if intention['intention'] == 2: # 用户指定某些已推荐产品
+    if user_intention == 2: # 用户指定某些已推荐产品
         # 用户点名的，即使有不合适的，也不滤掉。不合适的原因应该会出现在 content 里
         # 但若 analyze_user_input 时识别 product_nums 出错，可能出现 product_num 不在 db 里的情况。
         #   这种需要滤掉（在 retrieve_products_db 时滤掉的）。此时只能请用户重新查询了。
-        product_nums = intention['product_nums']
-        product_nums, prod_res, dyna_res = retrieve_products_db(task_id, product_nums)
-        # log.info(f'_____________prod_res type:{type(prod_res)}, _|{prod_res}|_')
-        # log.info(f'_____________dyna_res type:{type(dyna_res)}, _|{dyna_res}|_')
+        product_nums_preferred = user_summary_intention['product_nums']
+        product_nums, prod_res, dyna_res = retrieve_products_db(task_id, product_nums_preferred)
     else: # 1:用户希望推荐更多，或 0:其他
-        product_nums, prod_res, dyna_res = retrieve_products_kb_db(task_id, request.maxNum * 2, recent_messages, user_input_summary, condition)
+        product_nums, prod_res, dyna_res = retrieve_products_kb_db(task_id, request.maxNum, recent_messages, user_input_summary, condition)
 
     log.info(f'/get_task_id {task_id} final product nums:{product_nums}')
     if len(product_nums) == 0:
         product_infos = []
     else:
-        full_features = [(pn, prod_res[pn]['product_feature'] + '\n' + dyna_res[pn]['product_feature']) for pn in product_nums]
-        t0 = datetime.now()
-        matched_product_nums = llm.check_products_matched(recent_messages, full_features, task_id, 'qwen-turbo')
-        log.info(f'/get_task_id {task_id} check_products_matched costs {datetime.now() - t0} matched:{matched_product_nums}')
         product_infos = [{
             'product_num' : pn,
             'product_feature' : prod_res[pn]['product_feature'],
             'dynamic_feature' : dyna_res[pn]['product_feature'],
             'full_feature' : prod_res[pn]['product_feature'] + '\n' + dyna_res[pn]['product_feature'],
             'cals' : dyna_res[pn]['cals']
-        } for pn in matched_product_nums]
+        } for pn in product_nums]
         log.info(f'__product_infos: {product_infos}')
 
     SearchEntityExx.create(
@@ -333,7 +300,7 @@ def retrieve_products_bg(task_id: str, request):
         messages=json.dumps(request.messages, ensure_ascii=False, indent=4),
         user_input_summary=user_input_summary,
         condition=json.dumps(condition, ensure_ascii=False, indent=4),
-        user_intention=intention['intention'],
+        user_intention=user_intention,
         product_infos=json.dumps(product_infos, ensure_ascii=False, indent=4)
     )
     log.info(f'/get_task_id {task_id} retrieve_products_bg() total costs {datetime.now() - tx}')
@@ -526,49 +493,41 @@ async def get_products(task_id: str, timeout_secs: int):
         log.info(f'/get_products_result {task_id} db.product_infos empty')
         return ProductsResponse(products=[])
 
-    res_3d = []
     prod_infos = json.loads(search_entity.product_infos)
     recent_messages = json.loads(search_entity.messages)[-11:]
-    t0 = datetime.now()
-    model_name = 'qwen-plus'
-    res_contents = llm.get_product_contents(recent_messages, prod_infos, task_id, model_name)
-    log.info(f'/get_products_result {task_id} {model_name} llm.get_contents costs {datetime.now() - t0}')
-    log.info(f'/get_products_result {task_id} {model_name} llm.get_contents result {res_contents}')
-    products_sorted = sorted(res_contents, key=lambda p: -p['score'])
-    res_3d.append(products_sorted)
 
     t0 = datetime.now()
     model_name = 'qwen-turbo'
     res_contents = llm.get_product_contents(recent_messages, prod_infos, task_id, model_name)
     log.info(f'/get_products_result {task_id} {model_name} llm.get_contents costs {datetime.now() - t0}')
     log.info(f'/get_products_result {task_id} {model_name} llm.get_contents result {res_contents}')
+    log.info(f'_______________ res_cont_ents from llm {model_name}, before sorting _{res_contents}')
     # res_contents 中每一项有三个字段：content, score, product_num
     products_sorted = sorted(res_contents, key=lambda p: -p['score'])
-    res_3d.append(products_sorted)
+    log.info(f'/get_products_result {task_id} get_contents costs {datetime.now() - t0}')
+    log.info(f'/get_products_result {task_id} get_contents result {products_sorted}')
 
-    product_nums = [p['product_num'] for p in prod_infos]
-    full_features = [p['product_feature'] + '\n' + p['dynamic_feature'] for p in prod_infos]
-    wf_id_name = 'coze_product_search_contents_wf_id'
-    params = {
-        'env': config['env'],
-        'recent_messages': json.loads(search_entity.messages)[-11:],
-        'product_nums': product_nums,
-        'full_features': full_features
-    }
-    t0 = datetime.now()
-    log.info(f'/get_products_result {task_id} before wf.get_contents')
-    res = await coze_workflow_async(wf_id_name, params)
-    if res is None:
-        return ProductsResponse(products=[])
-    # res['products'] 中每一项有三个字段：content, score, product_num
-    products_sorted = sorted(res['products'], key=lambda p: -p['score'])
-    res_3d.append(products_sorted)
+    return ProductsResponse(products=products_sorted)
+    # return ProductsResponse(products=res_3d)
 
-    log.info(f'/get_products_result {task_id} wf.get_contents costs {datetime.now() - t0}')
-    log.info(f'/get_products_result {task_id} wf.get_contents result {res}')
+    # product_nums = [p['product_num'] for p in prod_infos]
+    # full_features = [p['product_feature'] + '\n' + p['dynamic_feature'] for p in prod_infos]
+    # wf_id_name = 'coze_product_search_contents_wf_id'
+    # params = {
+    #     'env': config['env'],
+    #     'recent_messages': json.loads(search_entity.messages)[-11:],
+    #     'product_nums': product_nums,
+    #     'full_features': full_features
+    # }
+    # t0 = datetime.now()
+    # log.info(f'/get_products_result {task_id} before wf.get_contents')
+    # res = await coze_workflow_async(wf_id_name, params)
+    # if res is None:
+    #     return ProductsResponse(products=[])
+    # log.info(f'_______________ res_cont_ents from llm {model_name}, before sorting _{res_contents}')
+    # # res['products'] 中每一项有三个字段：content, score, product_num
+    # products_sorted = sorted(res['products'], key=lambda p: -p['score'])
 
-    # return ProductsResponse(products=products_sorted)
-    return ProductsResponse(products=res_3d)
 
 if __name__ == '__main__':
     task_id = 'mock_task_id_1234'

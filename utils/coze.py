@@ -142,7 +142,6 @@ def get_feature_desc(product_detail, intro, parent_key, keys=None):
         return f"{intro}："
 
 def get_dynamic_feature(product_num: str, env: str):
-    # log.info('_________get dynamic fature_________')
     if env == 'uat':
         url = f"https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}"
     else:
@@ -330,22 +329,20 @@ def validate_cal(cal, condition):
 
     返回: bool: 如果 cal 符合 condition，则返回 True；否则返回 False。
     """
-    log.info(f'________ validate_cal(): cal:{cal}, condition:{condition}')
     try:
         # 检查价格是否在范围内
         if field_valid(cal, 'price'):
             min_price = format_price(condition['min_price'])
             max_price = format_price(condition['max_price'])
             price = format_price(cal['price'])
-            if min_price is not None and price is not None:
+            if min_price is not None and min_price > 0 and price is not None and price > 0:
                 if min_price > price:
                     return False
 
-            if max_price is not None and price is not None:
+            if max_price is not None and max_price > 0 and price is not None and price > 0:
                 if max_price < price:
                     return False
 
-        log.info('__________________________ will handle dates')
         # 检查出发日期和返回日期是否与条件中的日期有交集
         if field_valid(cal, 'depart_date') and (field_valid(condition, 'depart_date') or field_valid(condition, 'back_date')):
             # 将字符串日期转换为 datetime 对象
@@ -355,56 +352,31 @@ def validate_cal(cal, condition):
             condition_depart_date = datetime.strptime(condition['depart_date'], "%Y-%m-%d") if field_valid(condition, 'depart_date') else None
             condition_back_date = datetime.strptime(condition['back_date'], "%Y-%m-%d") if field_valid(condition, 'back_date') else None
 
-            log.info(f'____ cal_depart_date: {cal_depart_date}')
-            log.info(f'____   cal_back_date: {cal_back_date}')
-            log.info(f'____cond_depart_date: {condition_depart_date}')
-            log.info(f'____  cond_back_date: {condition_back_date}')
-
-            log.info('____________ will handle depart date')
             # 条件出发时间比可选出发时间相差超过7天
             if condition_depart_date and cal_depart_date and abs(condition_depart_date - cal_depart_date) >= timedelta(days=7):
-                log.info('       false')
                 return False
-            else:
-                log.info('       true')
 
-            log.info('________________ will handle ')
             # 条件返回时间比可选出发时间相差超过7天
             if condition_back_date and cal_back_date and abs(condition_back_date - cal_back_date) >= timedelta(days=7):
-                log.info('         false')
                 return False
-            else:
-                log.info('          true')
 
-
-        log.info('____________ will handle depart_date alone vs. today')
         if field_valid(cal, 'depart_date'):
             cal_depart_date = datetime.strptime(cal['depart_date'], "%Y-%m-%d")
-            log.info(f'____ cal_depart_date: {cal_depart_date}')
-            log.info(f'____      cond_today: {datetime.today()}')
             # 如果 cal_depart_date 比今天早，返回 False
             if cal_depart_date < datetime.today():
                 return False
 
-        log.info('______________________________ dates ok _________________')
-
-
-        log.info('_________________ check days _____________')
         # 检查旅行时长是否符合。不用太精确，最多允许前后相差 4 天。
         if field_valid(cal, 'trip_days'):
             days_cal = int(cal['trip_days'])
-            log.info(f'    days_cal: {days_cal}')
             if field_valid(condition, 'max_days'):
                 max_days_condition = int(condition['max_days'])
-                log.info(f'    max_days_condition: {max_days_condition}')
                 if max_days_condition != 0 and abs(max_days_condition - days_cal) >= 4:
                     return False
             if field_valid(condition, 'max_days'):
                 min_days_condition = int(condition['min_days'])
-                log.info(f'    min_days_condition: {min_days_condition}')
                 if min_days_condition != 0 and (min_days_condition - days_cal) >= 4:
                     return False
-        log.info('___________________ days ok ________________')
 
         # 检查存量是否满足最低要求
         if field_valid(condition, 'stock') and field_valid(cal, 'stock'):

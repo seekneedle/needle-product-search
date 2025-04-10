@@ -20,7 +20,7 @@ client = OpenAI(
 
 def qwen_call(messages, return_type: str, task_id: str, job_name: str, model_name: str):
     # task_id 和 job_name 只用于 logging 目的
-    log.info(f'{model_name} {task_id} {job_name} begins')
+    log.info(f'{task_id} {model_name} {job_name} begins')
     t0 = datetime.now()
     try:
         completion = client.chat.completions.create(
@@ -28,13 +28,13 @@ def qwen_call(messages, return_type: str, task_id: str, job_name: str, model_nam
             messages=messages,
             response_format={'type': return_type}
         )
-        log.info(f'{model_name} {task_id} {job_name} done, cost {datetime.now() - t0}')
+        log.info(f'{task_id} {model_name} {job_name} done, cost {datetime.now() - t0}')
         return completion.choices[0].message.content
     except APIError as e:
-        log.info(f'{model_name} {task_id} {job_name} APIError: {e.status_code}, {e.code}, {e.message}')
+        log.info(f'{task_id} {model_name} {job_name} APIError: {e.status_code}, {e.code}, {e.message}')
         return ''
     except Exception as e:  # 其他异常（如网络问题）
-        log.info(f'{model_name} {task_id} {job_name} api Exception: {str(e)}')
+        log.info(f'{task_id} {model_name} {job_name} api Exception: {str(e)}')
         return ''
 
 # 无 log 的版本。（带大量 log 的版本，见本文件下方）
@@ -56,12 +56,12 @@ def qwen_stream_call(messages, queue, model_name: str):
 
 # wrapper for qwen_stream_call()
 async def stream_generate_ex(messages, task_id: str, job_name: str, model_name: str):
-    log.info(f'{model_name} stream_call {task_id} {job_name} WRAPPER before calling qwen')
+    log.info(f'stream_call {task_id} {model_name} {job_name} WRAPPER before calling qwen')
     queue = multiprocessing.Queue()
     process = multiprocessing.Process(target=qwen_stream_call, args=(messages, queue, model_name))
-    log.info(f'{model_name} stream_call {task_id} {job_name} WRAPPER before process.start()')
+    log.info(f'stream_call {task_id} {model_name} {job_name} WRAPPER before process.start()')
     process.start()
-    log.info(f'{model_name} stream_call {task_id} {job_name} WRAPPER after process.start()')
+    log.info(f'stream_call {task_id} {model_name} {job_name} WRAPPER after process.start()')
 
     try:
         cnt = 0
@@ -72,7 +72,7 @@ async def stream_generate_ex(messages, task_id: str, job_name: str, model_name: 
                 queue.get  # 阻塞调用，但通过线程池转为异步
             )
             if cnt == 0:
-                log.info(f'{model_name} stream_call {task_id} {job_name} WRAPPER first chunk received')
+                log.info(f'stream_call {task_id} {model_name} {job_name} WRAPPER first chunk received')
             cnt += 1
             if data is None: # 结束信号
                 break
@@ -137,14 +137,14 @@ def qwen_stream_call_logs(messages, queue):
 #
 # 目前只用到了 user_intention
 #
-def analyze_user_input(recent_messages: list, task_id: str):
-    prompt_user_input = f'''
-        根据用户聊天历史，总结用户对旅行产品的需求。要以用户的口吻输出，不要以客服人员的角度总结。
-        如果总结中涉及到已推荐产品，要带上产品编号，但不要带其标题。
-        如果不涉及已推荐产品，就不用说"目前没有提到具体推荐的产品编号"这样的话。
-        输出文字要平实，不要带文学色彩。要简短，不要啰嗦。
-        用户聊天历史记录为：{recent_messages}
-    '''
+def analyze_user_input(recent_messages: list, task_id: str, model_name: str):
+    # prompt_user_input = f'''
+    #     根据用户聊天历史，总结用户对旅行产品的需求。要以用户的口吻输出，不要以客服人员的角度总结。
+    #     如果总结中涉及到已推荐产品，要带上产品编号，但不要带其标题。
+    #     如果不涉及已推荐产品，就不用说"目前没有提到具体推荐的产品编号"这样的话。
+    #     输出文字要平实，不要带文学色彩。要简短，不要啰嗦。
+    #     用户聊天历史记录为：{recent_messages}
+    # '''
 
     prompt_condition = f'''
         ### 角色
@@ -160,7 +160,7 @@ def analyze_user_input(recent_messages: list, task_id: str):
 
         ### 能力2：提取产品的时长
         1. 根据聊天历史，提取客户要求的最少旅游多少天，放到 min_days。若未提及，则输出 0
-        2. 根据聊天历史，提取客户要求的最多旅游多少天。如果 max_days。若未提及，则输出 0
+        2. 根据聊天历史，提取客户要求的最多旅游多少天。放到 max_days。若未提及，则输出 0
 
         ### 能力3：提取产品存量要求
         1. 根据聊天历史，提取客户要求的最少存量，放入 stock 里。存量不能小于 1。
@@ -168,8 +168,8 @@ def analyze_user_input(recent_messages: list, task_id: str):
         3. 输出存量必须是整数。
 
         ### 能力4：提取产品价格要求
-        1. 根据聊天历史，提取客户要求的最低价格，放到 min_price 里。如果没有提及最低价格，则最低价格输出0。
-        2. 根据聊天历史，提取客户要求的最高价格，放到 max_price 里。如果没有提及最高价格，则最高价格输出空。
+        1. 根据聊天历史，提取客户要求的最低价格，放到 min_price 里。若未提及最低价格，则最低价格输出 0。
+        2. 根据聊天历史，提取客户要求的最高价格，放到 max_price 里。若未提及最高价格，则最高价格输出 0。
 
         ### 限制
         1. 不允许编造内容。
@@ -178,16 +178,16 @@ def analyze_user_input(recent_messages: list, task_id: str):
         ### 用户聊天历史
 
         {recent_messages}
-'''
-
-    prompt_user_intention = f'''
-        根据用户聊天历史，判断用户最后的意图。结果放到 json 对象中，结构化返回。
-        如果用户感觉以前系统推荐的产品不太合适、或者不够多，希望再推荐些其他产品，返回 intention = 1。
-        如果用户表示出对某个或某几个产品的肯定，或进一步询问已推荐的一个或几个产品的详细信息（如出发日期、价格、特点等），或想对比几个已推荐产品的某些特点，返回 intention = 2，并将用户指定的诸产品放入 product_nums 列表中。
-        如果是其他意图，返回 intention = 0。
-        并将理由放在 reason 中。
-        用户聊天历史记录为：{recent_messages}
     '''
+
+    # prompt_user_intention = f'''
+    #     根据用户聊天历史，判断用户最后的意图。结果放到 json 对象中，结构化返回。
+    #     如果用户感觉以前系统推荐的产品不太合适、或者不够多，希望再推荐些其他产品，返回 intention = 1。
+    #     如果用户表示出对某个或某几个产品的肯定，或进一步询问已推荐的一个或几个产品的详细信息（如出发日期、价格、特点等），或想对比几个已推荐产品的某些特点，返回 intention = 2，并将用户指定的诸产品放入 product_nums 列表中。
+    #     如果是其他意图，返回 intention = 0。
+    #     并将理由放在 reason 中。
+    #     用户聊天历史记录为：{recent_messages}
+    # '''
 
     prompt_user_summary_intention = f'''
         根据用户聊天历史，总结用户对旅行产品的需求，并判断用户的意图。
@@ -201,32 +201,33 @@ def analyze_user_input(recent_messages: list, task_id: str):
 
         关于用户的意图：
         如果用户感觉以前系统推荐的产品不太合适、或者不够多，希望再推荐些其他产品，返回 intention = 1。
-        如果用户表示出对某个或某几个产品的肯定，或进一步询问已推荐的一个或几个产品的详细信息（如出发日期、价格、特点等），或想对比几个已推荐产品的某些特点，返回 intention = 2，并将用户指定的各产品放入 product_nums 列表中。
+        如果用户表示出对某个或某几个产品的肯定，或进一步询问已推荐的一个或几个产品的详细信息（如出发日期、价格、特点等），
+        或想对比几个已推荐产品的某些特点，返回 intention = 2，并将用户指定的各产品编号（注意是以字母 U 打头的，不要漏了这个字母）放入 product_nums 列表中。
         如果是其他意图，返回 intention = 0。
         并将理由放在 reason 中。
 
         用户聊天历史记录为：{recent_messages}
     '''
 
-    messages_user_input = [{'role': 'user', 'content': prompt_user_input}]
+    # messages_user_input = [{'role': 'user', 'content': prompt_user_input}]
     messages_condition = [{'role': 'user', 'content': prompt_condition}]
-    messages_user_intention = [{'role': 'user', 'content': prompt_user_intention}]
+    # messages_user_intention = [{'role': 'user', 'content': prompt_user_intention}]
     messages_user_summary_intention = [{'role': 'user', 'content': prompt_user_summary_intention}]
 
     with ThreadPoolExecutor(max_workers=4) as executor:
-        f1 = executor.submit(qwen_call, messages_user_input, 'text', task_id, 'user_input_summary', 'qwen-plus')  # 提交任务
+        # f1 = executor.submit(qwen_call, messages_user_input, 'text', task_id, 'user_input_summary', model_name)  # 提交任务
         f2 = executor.submit(qwen_call, messages_condition, 'json_object', task_id, 'condition', 'qwen-turbo')
-        f3 = executor.submit(qwen_call, messages_user_intention, 'json_object', task_id, 'user_intention', 'qwen-plus')
-        f4 = executor.submit(qwen_call, messages_user_summary_intention, 'json_object', task_id, 'user_summary_intention', 'qwen-plus')
+        # f3 = executor.submit(qwen_call, messages_user_intention, 'json_object', task_id, 'user_intention', model_name)
+        f4 = executor.submit(qwen_call, messages_user_summary_intention, 'json_object', task_id, 'user_summary_intention', model_name)
 
-    user_input_summary = f1.result()
+    # user_input_summary = f1.result()
     condition = json.loads(f2.result())
-    user_intention = json.loads(f3.result())
+    # user_intention = json.loads(f3.result())
     user_summary_intention = json.loads(f4.result())
 
     # 意图识别时，如果没正面提到某些产品，可能没有 product_nums 字段。补一个，以防不测。
-    if 'product_nums' not in user_intention:
-        user_intention['product_nums'] = []
+    # if 'product_nums' not in user_intention:
+    #     user_intention['product_nums'] = []
     if 'product_nums' not in user_summary_intention:
         user_summary_intention['product_nums'] = []
 
@@ -245,7 +246,7 @@ def analyze_user_input(recent_messages: list, task_id: str):
             delta = 365 + 366 if back_date < leap_date else 365 * 2
             condition['back_date'] = (back_date + timedelta(days=delta)).strftime('%Y-%m-%d')
 
-    return user_input_summary, condition, user_intention, user_summary_intention
+    return condition, user_summary_intention
 
 def to_match_prompt(recent_messages, feature: str) -> list:
     # 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
@@ -270,27 +271,29 @@ def check_products_matched(recent_messages, full_features, task_id: str, model_n
         ): pn for pn, feature in full_features}
 
         for f in as_completed(futures):
+            prod_name = futures[f]
             try:
                 if f.result() == '': # 出错，只能跳过，无其他办法
-                    log.info(f'check_products_matched {task_id} skipped.')
+                    log.info(f'{task_id} {model_name} {prod_name} if_matched wrong. skipped.')
                     continue
                 res = json.loads(f.result())
-                log.info(f'{model_name} {task_id} if_matched result:{res}')
+                log.info(f'{task_id} {model_name} {prod_name} if_matched result:{res}')
                 if res['matched']:
                     matched_product_nums.append(futures[f])
             except Exception as e:
                 trace_info = traceback.format_exc()
-                info = f'Exception for batch_features, e:{e}, prod_num:{futures[f]}, trace: {trace_info}'
+                info = f'Exception for batch_features, e:{e}, prod_num:{prod_name}, trace: {trace_info}'
                 print(f'__exception: {info}')
     return matched_product_nums
 
 def to_content_prompt(recent_messages, feature: str) -> list:
     # 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
     prompt = f'''
-        根据产品信息，结合用户聊天历史中的需求，给出该产品的推荐理由、产品与用户需求的相似度分数。
-        结果放到 json 对象中，结构化返回。
-        推荐理由输出到 content。相似度分数输出到 score，最高 100 分。
-        已知该产品与用户需求比较相符，所以请着重给出亮点。
+        结构化返回，结果放到 json 对象中，其中有且只有两个字段：content 和 score。
+        根据产品信息，结合用户聊天历史中的需求，
+        给出该产品的推荐理由（输出到 json 对象的 content 字段）、
+        产品与用户需求的相似度分数（输出到 json 对象的 score 字段，最高 100 分）。
+        注意，已知该产品与用户需求比较相符。所以，归纳推荐理由时，请着重给出亮点。
         即使你认为它不太符合用户需求，也不要直接说它不合适，而是要用"虽然它不完全匹配，但也比较相关"这样的话术。
         用户的对话历史：{recent_messages}
         旅游产品信息：{feature}
@@ -312,15 +315,15 @@ def get_product_contents(recent_messages, prod_infos, task_id: str, model_name: 
             product_num = futures[f]
             try:
                 if f.result() == '': # 出错，只能跳过，无其他办法
-                    log.info(f'get_product_content {task_id} {product_num} skipped.')
+                    log.info(f'{task_id} {model_name} {product_num} content wrong. skipped.')
                     continue
                 res = json.loads(f.result())
                 res['product_num'] = product_num
-                log.info(f'{model_name} {task_id} {product_num} content:{res}')
+                log.info(f'{task_id} {model_name} {product_num} content:{res}')
                 res_contents.append(res)
             except Exception as e:
                 trace_info = traceback.format_exc()
-                info = f'Exception for batch_features, e:{e}, prod_num:{futures[f]}, trace: {trace_info}'
+                info = f'Exception for batch_features, e:{e}, prod_num:{product_num}, trace: {trace_info}'
                 print(f'__exception: {info}')
     return res_contents
 
@@ -331,16 +334,32 @@ if __name__ == '__main__':
             "role": "user",
             "content": "您好，想去新加坡和马来西亚，大概一周时间，父母二人带一个十二岁男孩。有什么推荐吗？"
         },
-        {
-            "role": "assistant",
-            "content": "为你推荐编号为 U174845 的产品，【众信制造：金牌南洋传奇】新加坡+马来西亚北京起止 5 晚 7 天。该产品的线路特色包括双峰塔-国家皇宫-广场-国家艺术馆-CITYWALK 城市单轨车-彩虹阶梯-阿罗街。此外，该产品还包含机票费用、行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、境外旅游人身意外险、行程所含景点（区）门票等。出发地为北京，目的地为亚洲、新加坡。\n\n或者你也可以考虑编号为 U167657 的产品，北京起止【寻味南洋-米其林之旅】新加坡+马来西亚 7 天。该产品有两条线路可供选择，线路 A 是马进新出 CA871，线路 C 是大兴去首都回。产品特色是寻味南洋-米其林之旅，你可以品尝到当地的美食。费用包含机票费用、行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、境外旅游人身意外险、行程所含景点（区）门票等。出发地为北京，目的地为亚洲、马来西亚和亚洲、新加坡。\n\n如果你从河南郑州出发，还可以选择编号为 U179033 的产品，【新加坡乐园 MAX】郑州起止 4 晚 6 天。该产品升级 2 晚国际四星，包含新加坡环球影城+飞禽动物园+日间动物园三大乐园精彩之行。费用包含机票费用、行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、中文导游服务、境外旅游人身意外险、行程所含景点（区）门票等。出发地为河南郑州，目的地为亚洲、新加坡。"
-        },
+        {"role": "assistant",
+         "content": """为你推荐编号为 U174845 的产品，【众信制造：金牌南洋传奇】新加坡+马来西亚北京起止 5 晚 7 天。
+      该产品的线路特色包括双峰塔-国家皇宫-广场-国家艺术馆-CITYWALK 城市单轨车-彩虹阶梯-阿罗街。
+      此外，该产品还包含机票费用、行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、境外旅游人身意外险、行程所含景点（区）门票等。
+      出发地为北京，目的地为亚洲、新加坡。\n\n
+      或者你也可以考虑编号为 U167657 的产品，北京起止【寻味南洋-米其林之旅】新加坡+马来西亚 7 天。
+      该产品有两条线路可供选择，线路 A 是马进新出 CA871，线路 C 是大兴去首都回。产品特色是寻味南洋-米其林之旅，
+      你可以品尝到当地的美食。费用包含机票费用、行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、境外旅游人身意外险、
+      行程所含景点（区）门票等。出发地为北京，目的地为亚洲、马来西亚和亚洲、新加坡。\n\n
+      如果你从河南郑州出发，还可以选择编号为 U179033 的产品，【新加坡乐园 MAX】郑州起止 4 晚 6 天。
+      该产品升级 2 晚国际四星，包含新加坡环球影城+飞禽动物园+日间动物园三大乐园精彩之行。费用包含机票费用、
+      行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、中文导游服务、境外旅游人身意外险、行程所含景点（区）门票等。
+      出发地为河南郑州，目的地为亚洲、新加坡。"""
+         },
         {
             "role": "user",
-            "content": "这几个都不错，帮我比较一下它们的特色吧，排个序",
-            # "content": "嗯，我们不希望太累，想轻松点。从北京出发。费用不是问题，至少五万起。要快，本周末之前必须出发。"
+            "content": "第1个、第三个都还行。麻烦帮我好好规划一下。"  # 这几个都不错。你帮我好好做个比较，我最后从中选一个"
         }
     ]
+    t00 = datetime.now()
+    model_name = 'qwen-turbo'
+    res = analyze_user_input(request_messages, task_id, model_name)
+    log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
+    log.info(f'/get_task_id {task_id} {model_name}.condition:{res[0]}')
+    log.info(f'/get_task_id {task_id} {model_name}.summary_intention:{res[1]}')
+    sys.exit(1)
 
     # dates = [ '一周', '半个月', '三五天', '十天半个月', '七八天', '10天', '3天', ]
     # dates = [ '今年暑假', '明年春节', '国庆', '五一', '劳动节', '下周', '今年开斋节', ]
@@ -351,14 +370,30 @@ if __name__ == '__main__':
         request_messages = [
             {
                 "role": "user",
-                "content": f"您好，想{d}期间去欧洲，主要是英法德意这几个国家。想玩十天左右"
+                "content": f"您好，想{d}期间加坡和马来西亚，大概半个月时间，父母二人带一个十二岁男孩。有什么推荐吗"
             },
+        ]
+        request_messages = [
+            {'role': 'user', 'content': '有天山相关的旅游产品吗。想五一期间去，玩一周左右吧。'},
+            # {"role": "assistant",
+            #  "content": "编号为U184563的产品“【杏好遇见】双飞8日游”包含天山天池景点，行程中会游览天山天池风景区，体验瑶池仙境。成人售价4980.0元，出发日期2025-04-08，返回日期2025-04-15，目前有6个库存。"},
+            # {'role': 'user', 'content': '这个感觉不太好。再帮我推荐点别的更合适的吧'},
         ]
 
         t00 = datetime.now()
-        model_name = 'qwen-plus'
-        user_analysis_qwen = analyze_user_input(request_messages, task_id, model_name)
+        model_name = 'qwen-turbo'
+        res = analyze_user_input(request_messages, task_id, model_name)
         log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
-        log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{user_analysis_qwen[0]}')
-        log.info(f'/get_task_id {task_id} {model_name}.condition:{user_analysis_qwen[1]}')
-        log.info(f'/get_task_id {task_id} {model_name}.intention:{user_analysis_qwen[2]}')
+        log.info(f'/get_task_id {task_id} {model_name}.condition:{res[0]}')
+        log.info(f'/get_task_id {task_id} {model_name}.summary_intention:{res[1]}')
+
+        # import time
+        # time.sleep(1)
+        # t00 = datetime.now()
+        # model_name = 'qwen-turbo'
+        # res = analyze_user_input(request_messages, task_id, model_name)
+        # log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
+        # log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{res[0]}')
+        # log.info(f'/get_task_id {task_id} {model_name}.condition:{res[1]}')
+        # log.info(f'/get_task_id {task_id} {model_name}.intention:{res[2]}')
+        # log.info(f'/get_task_id {task_id} {model_name}.summary_intention:{res[3]}')
