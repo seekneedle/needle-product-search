@@ -235,6 +235,7 @@ def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_in
 
     log.info(f'/get_task_id {task_id} retrieve_products_kb_db total costs {datetime.now() - t0}')
     if found:
+        product_nums_3 = product_nums_3[:max_num]
         prod_res_3 = [prod_res[pn] for pn in product_nums_3]
         dyna_res_3 = [dyna_res[pn] for pn in product_nums_3]
         return product_nums_3, prod_res, dyna_res
