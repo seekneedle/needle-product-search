@@ -28,13 +28,20 @@ coze_product_search_stream_wf_id: "7484981134314356773"
 
 coze_product_search_task_wf_id: "7488594959365718025"
 coze_product_search_summary_wf_id: "7488635913984770099"
-coze_product_search_contents_wf_id: "7488657116343271459" # 批处理
-coze_product_search_content_wf_id: "7488632530797084711" # 单个
+coze_product_search_contents_wf_id: "7488657116343271459" # batch
+coze_product_search_content_wf_id: "7488632530797084711" # single
 
 
 coze_product_compare_wf_id: "7462301883848704027"
 coze_product_feature_wf_id: "7478322545244094503"
 coze_product_questions_wf_id: "7479732260448632867"
+
+model_summary: 'qwen-turbo'
+model_content: 'qwen-turbo'
+model_user_condition: 'qwen-turbo'
+model_user_summary_intention: 'qwen-plus'
+model_product_matched: 'qwen-turbo'
+
 kb_id: icmp3tfyk6
 # uux_url: mapi.uuxlink.com
 uux_url: mapi.uuxlink.com
