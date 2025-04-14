@@ -291,8 +291,7 @@ def to_content_prompt(recent_messages, feature: str) -> list:
     prompt = f'''
         结构化返回，结果放到 json 对象中，其中有且只有两个字段：content 和 score。
         根据产品信息，结合用户聊天历史中的需求，
-        给出该产品的推荐理由（输出到 json 对象的 content 字段）、
-        产品与用户需求的相似度分数（输出到 json 对象的 score 字段，最高 100 分）。
+        给出该产品的推荐理由（输出到 json 对象的 content 字段）和该产品与用户需求的相似度分数（输出到 json 对象的 score 字段，最高 100 分）。
         注意，已知该产品与用户需求比较相符。所以，归纳推荐理由时，请着重给出亮点。
         即使你认为它不太符合用户需求，也不要直接说它不合适，而是要用"虽然它不完全匹配，但也比较相关"这样的话术。
         用户的对话历史：{recent_messages}
@@ -311,20 +310,36 @@ def get_product_contents(recent_messages, prod_infos, task_id: str, model_name: 
             'json_object', task_id, f"{p['product_num']} content", model_name
         ): p['product_num'] for p in prod_infos}
 
+        # 大模型在极罕见情况下不返回 score。增加 sum_score, num_scores 及相关逻辑以容错。
+        sum_score = 0
+        num_scores = 0
         for f in as_completed(futures):
             product_num = futures[f]
             try:
                 if f.result() == '': # 出错，只能跳过，无其他办法
-                    log.info(f'{task_id} {model_name} {product_num} content wrong. skipped.')
+                    log.info(f'{task_id} {model_name} {product_num} __content wrong__. skipped.')
                     continue
                 res = json.loads(f.result())
                 res['product_num'] = product_num
+                if 'score' in res:
+                    sum_score += res['score']
+                    num_scores += 1
                 log.info(f'{task_id} {model_name} {product_num} content:{res}')
                 res_contents.append(res)
             except Exception as e:
                 trace_info = traceback.format_exc()
                 info = f'Exception for batch_features, e:{e}, prod_num:{product_num}, trace: {trace_info}'
                 print(f'__exception: {info}')
+
+    # 给没有 score 的产品手工增加 score
+    num_contents = len(res_contents)
+    if num_scores != num_contents:
+        log.info(f'{task_id} {model_name} __content wrong__ {num_contents - num_scores} of {num_contents} products have no score')
+        manual_score = 85 if num_scores == 0 else (sum_score // num_scores)
+        for c in res_contents:
+            if 'score' not in c:
+                c['score'] = manual_score
+                log.info(f'{task_id} {model_name} {product_num} __content wrong__ manual score: {manual_score}')
     return res_contents
 
 if __name__ == '__main__':
