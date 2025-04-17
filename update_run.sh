@@ -1,0 +1,1 @@
+ENV=update nohup python main.py >output/run.log 2>&1 &

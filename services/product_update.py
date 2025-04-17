@@ -5,6 +5,7 @@ import json
 from utils.config import config
 from utils.security import decrypt
 from utils.log import log
+from utils import coze_wf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import traceback
 from server.response import RequestError
@@ -101,6 +102,7 @@ def process_page(current):
         retries = 0
         while retries < 3:
             try:
+                # todo use coze_wf.get_product_feature() instead
                 product_feature = get_product_feature(product_num)
                 if product_feature is None or product_feature == '':
                     raise RuntimeError('detail empty')

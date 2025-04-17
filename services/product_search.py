@@ -42,50 +42,6 @@ class ProductSearchTaskResponse(BaseModel):
 class ProductsResponse(BaseModel):
     products: List[object]
 
-async def coze_workflow_async(wf_id, params):
-    url = config['coze_api_url']
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': decrypt(config['coze_api_auth'])
-    }
-    data = {
-        "workflow_id": config[wf_id],
-        "parameters": params
-    }
-    log.info(f'coze_call_async params: wf:{wf_id} {params}')
-    # response = requests.post(url, headers=headers, json=data)
-
-    # coze workflow 返回格式：https://www.coze.cn/open/docs/developer_guides/workflow_run
-    retries = 0
-    while retries < 3:
-        log.info(f'coze_call_async wf:{wf_id} retries:{retries} before aiohttp.post')
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=data) as response:
-                log.info(f'coze_call_async wf:{wf_id} retries:{retries} after aiohttp.post')
-                if response.status == 200:
-                    response_data = await response.json()
-                    log.info(f'coze_call_async wf:{wf_id} retries:{retries} http ok, response:{response_data}')
-                    if response_data['code'] == 0: # coze workflow 执行成功
-                        input_data = response_data['data']
-                        try:
-                            parsed_data = json.loads(input_data)
-                            return parsed_data
-                        except json.JSONDecodeError:
-                            err = f'coze_call_async wf:{wf_id} retries:{retries} json parse error:{response.status}, 响应内容: {await response.text()}'
-                            log.error(err)
-                            # raise RequestError(response.status, err)
-                    else: # coze workflow 执行失败
-                        pass # 不需要干啥（log 也在上面打了），retry 下一次
-                else:
-                    err = f'coze_call_async wf:{wf_id} retries:{retries} http bad {response.status}, 响应内容: {await response.text()}'
-                    log.error(err)
-                    # raise RequestError(response.status, err)
-        await asyncio.sleep(1)
-        retries += 1
-    return None
-
-def coze_workflow_sync(wf_id, params):
-    return asyncio.run(coze_workflow_async(wf_id, params))
 
 def product_search(request: ProductSearchRequest):
     url = config['coze_api_url']
@@ -505,23 +461,6 @@ async def get_products(task_id: str, timeout_secs: int):
     log.info(f'/get_products_result {task_id} get_contents result {products_sorted}')
 
     return ProductsResponse(products=products_sorted)
-
-    # product_nums = [p['product_num'] for p in prod_infos]
-    # full_features = [p['product_feature'] + '\n' + p['dynamic_feature'] for p in prod_infos]
-    # wf_id_name = 'coze_product_search_contents_wf_id'
-    # params = {
-    #     'env': config['env'],
-    #     'recent_messages': json.loads(search_entity.messages)[-11:],
-    #     'product_nums': product_nums,
-    #     'full_features': full_features
-    # }
-    # t0 = datetime.now()
-    # log.info(f'/get_products_result {task_id} before wf.get_contents')
-    # res = await coze_workflow_async(wf_id_name, params)
-    # if res is None:
-    #     return ProductsResponse(products=[])
-    # # res['products'] 中每一项有三个字段：content, score, product_num
-    # products_sorted = sorted(res['products'], key=lambda p: -p['score'])
 
 
 if __name__ == '__main__':

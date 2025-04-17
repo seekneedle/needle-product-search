@@ -1,19 +1,19 @@
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
 import traceback
 from datetime import datetime
-import time
+import threading
 
-from server.auth import check_permission
+from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 
 from utils.log import log
 from services.product_search import product_search, ProductSearchRequest, ProductSearchTaskResponse, get_summary, get_products, get_task_id
 from services.product_compare import product_compare, ProductCompareRequest
 from services.product_update import product_update
-from services.product_increment_update import product_increment_update, ProductUpdateIncrRequest
+from services.product_increment_update import product_increment_update, ProductUpdateIncrRequest, ProductUpdateIncrResponse
 from services.product_question import product_question, ProductQuestionRequest
+from server.auth import check_permission
 from server.response import SuccessResponse, FailResponse
-from pydantic import BaseModel
 
 store_router = APIRouter(prefix='/product', dependencies=[Depends(check_permission)])
 
@@ -59,30 +59,32 @@ async def product_update_api():
         log.error(f'Exception for /product/update, e: {e}, trace: {trace_info}')
         return FailResponse(error=str(e))
 
-# # 3. 增量更新产品特征库
-# @store_router.post('/increment_update')
-# async def product_update_incr_api(request: ProductUpdateIncrRequest):
-#     log.info(f'/increment_update: request:{request}')
-#     try:
-#         response = product_increment_update(request)
-#         log.info(f'/increment_update: response:{response}')
-#         return SuccessResponse(data=response)
-#     except Exception as e:
-#         trace_info = traceback.format_exc()
-#         log.error(f'Exception for /product/update_incr, e: {e}, trace: {trace_info}')
-#         return FailResponse(error=str(e))
+# 3. 增量更新产品特征库
+@store_router.post('/increment_update')
+async def product_update_incr_api(request: ProductUpdateIncrRequest):
+    log.info(f'/incr_update api request received {request}')
+    if len(request.productNums) == 0:
+        return ProductUpdateIncrResponse(results=[])
+
+    # 不关心返回值；发射后不管
+    threading.Thread(target=product_increment_update, args=(request,)).start()
+    return ProductUpdateIncrResponse(results=[])
 
 # 4. you may ask
+#
+# todo uses task_id also
+#
 @store_router.post('/product_question')
 async def product_question_api(request: ProductQuestionRequest):
-    log.info(f'/product_question: request:{request}')
+    log.info(f'/product_question api request received {request}')
     try:
-        product_question_response = product_question(request)
-        log.info(f'/product_question: response:{product_question_response}')
+        t0 = datetime.now()
+        product_question_response = await product_question(request)
+        log.info(f'/product_question api request costs {datetime.now() - t0} response:{product_question_response}')
         return SuccessResponse(data=product_question_response)
     except Exception as e:
         trace_info = traceback.format_exc()
-        log.error(f'Exception for /product/product_question, request: {request}, e: {e}, trace: {trace_info}')
+        log.error(f'/product_question exception, request: {request}, e: {e}, trace: {trace_info}')
         return FailResponse(error=str(e))
 
 # 5. 发起异步产品检索

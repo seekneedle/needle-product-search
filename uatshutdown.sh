@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# 查找监听8084端口的进程PID
 pid=$(lsof -i :8405 | awk 'NR>1 {print $2}')
 
-# 如果找到了PID，则尝试杀死进程
+echo "pid: $pid"
+
 if [ -n "$pid" ]; then
     echo "Stopping application with PID $pid..."
     kill $pid
