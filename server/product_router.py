@@ -71,9 +71,6 @@ async def product_update_incr_api(request: ProductUpdateIncrRequest):
     return ProductUpdateIncrResponse(results=[])
 
 # 4. you may ask
-#
-# todo uses task_id also
-#
 @store_router.post('/product_question')
 async def product_question_api(request: ProductQuestionRequest):
     log.info(f'/product_question api request received {request}')
@@ -144,35 +141,3 @@ async def get_products_result(
         return SuccessResponse(data=resp)
     else:
         return FailResponse(error='Products data not available after timeout')
-
-# async def get_products_result_original(
-#     task_id: str,
-#     max_retries: int = 60,
-#     retry_delay: int = 3  # 默认 3 秒
-# ):
-#     log.info(f'/get_products_result {task_id}')
-#     t0 = datetime.now()
-#     retry_count = 0
-#     while retry_count < max_retries:
-#         try:
-#             # 直接调用同步函数（不关心它的耗时）
-#             products_response = get_products(task_id)
-#             log.info(f'/get_products_result {task_id}, products: {products_response}')
-#
-#             # 检查 products 是否为空
-#             if not products_response.products:
-#                 retry_count += 1
-#                 log.warning(f'Products empty, retrying... (Attempt {retry_count}/{max_retries})')
-#                 await asyncio.sleep(retry_delay)  # 关键点：异步 sleep，不阻塞事件循环
-#                 continue
-#             log.info(f'/get_products_result costs {datetime.now() - t0}')
-#             return SuccessResponse(data=products_response)
-#
-#         except Exception as e:
-#             trace_info = traceback.format_exc()
-#             log.error(f'Exception for /get_products_result {task_id}, e: {e}, trace: {trace_info}')
-#             return FailResponse(error=str(e))
-#
-#     # 重试次数耗尽仍无数据
-#     log.error(f"Max retries reached for {task_id}, products still empty.")
-#     return FailResponse(error="Products data not available after retries")

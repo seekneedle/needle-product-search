@@ -22,7 +22,7 @@ class ProductUpdateIncrResponse(BaseModel):
     results: List[str]
 
 #
-# 以上调用 coze wf，除了静态特征，还调了一个大模型生成「以下是为您总结的该旅行产品特点」
+# get_product_feature() 调用 coze wf，除了静态特征，还调了一个大模型生成「以下是为您总结的该旅行产品特点」
 # 为与「全量更新」保持一致，保留此 wf 调用，暂不迁移到 coze.get_product_feature()
 #### begin of 暂不迁移
 # product_feature = coze.get_product_feature(product_num, 'prod')
@@ -40,13 +40,11 @@ def process_add_batch(product_nums):
             product_num = futures[f]
             try:
                 if f.result() == '': # 出错，只能跳过，无其他办法
-                    # log.info(f'{task_id} {model_name} {prod_name} if_matched wrong. skipped.')
                     continue
                 product_feature = f.result()
                 if product_feature is None or product_feature == '':
                     continue
-                file_content = product_feature
-                # file_content 内容太多，就不往 log 里打了
+                file_content = product_feature # 内容太多，就不往 log 里打了
                 file_name = product_num + ".txt"
                 # files 对应的 value 是 (str, str) tuple，不是特殊数据类型
                 files.append(('files', (file_name, file_content.encode('utf-8'))))
@@ -56,33 +54,6 @@ def process_add_batch(product_nums):
     result = '' if len(files) == 0 else vector_store_api.file_add(files)
     log.info(f'/incr_update batch_add {product_nums} cost {datetime.now() - t00} result:{result}')
     return result
-
-
-
-    #
-    # for product_num in product_nums:
-    #     retries = 0
-    #     while retries < 3:
-    #         try:
-    #             t0 = datetime.now()
-    #             log.info(f'/incr_update add_batch {product_num} coze_wf.get_product_feature begins.')
-    #             product_feature = coze_wf.get_product_feature(product_num)
-    #             log.info(f'/incr_update add_batch {product_num} coze_wf.get_product_feature costs {datetime.now() - t0}')
-    #             if product_feature is None or product_feature == '':
-    #                 # raise RuntimeError('detail empty')
-    #                 continue # 可能是内部错误，再试。三次都失败，就不会将其加入。
-    #
-    #             file_content = product_feature
-    #             # file_content 内容太多，就不往 log 里打了
-    #             # log.info(f'/incr_update add_batch {product_num}')
-    #             file_name = product_num + ".txt"
-    #             # files 对应的 value 是 (str, str) tuple，不是特殊数据类型
-    #             files.append(('files', (file_name, file_content.encode('utf-8'))))
-    #             break
-    #         except Exception as e:
-    #             log.info(f'/incr_update add_batch {product_num} get_product_feature retry:{retries} {e}')
-    #             retries += 1
-
 
 def get_file_ids(product_nums):
     data = {
