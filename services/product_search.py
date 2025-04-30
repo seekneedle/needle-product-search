@@ -122,7 +122,7 @@ def retrieve_products_kb_db_orig(task_id: str, max_num: int, recent_messages, us
         # kb_res 是 dict 类型
         product_nums = kb_res['product_nums']
         log.info(f'/get_task_id {task_id} kb.retrieve result:{product_nums}')
-        dyna_res = coze.get_dynamic_features(product_nums, env)['products']
+        dyna_res = coze.get_dynamic_features(product_nums, env)
         t3 = datetime.now()
         log.info(f'/get_task_id {task_id} db.get_dynamic_features costs {t3 - t2}')
         remaining_product_nums = coze.filter_dynamic(condition, dyna_res)['product_nums']
@@ -135,7 +135,7 @@ def retrieve_products_kb_db_orig(task_id: str, max_num: int, recent_messages, us
 
     log.info(f'__remaining_product_nums:{remaining_product_nums}')
     t0 = datetime.now()
-    prod_res = coze.get_product_features(remaining_product_nums, env)['products']
+    prod_res = coze.get_product_features(remaining_product_nums, env)
     log.info(f'/get_task_id {task_id} db.get_product_features costs {datetime.now() - t0}')
     return remaining_product_nums, prod_res, dyna_res
 '''
@@ -154,26 +154,42 @@ def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_in
         t2 = datetime.now()
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} retrieve_kb costs {t2 - t1}')
         # kb_res 是 dict 类型
-        product_nums_0 = kb_res['product_nums']
+        product_nums_0 = list(set(kb_res['product_nums'])) # 去重，因 kb 返回可能有重复的
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after retrieve_kb: {product_nums_0}')
         # 去掉曾经被过滤掉的
         product_nums_1 = list(set(product_nums_0) - product_nums_bad)
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_bad: {product_nums_1}')
         # step 2. 从 kb 取 dynamic features
-        dyna_res = coze.get_dynamic_features(product_nums_1, env)['products']
+        dyna_res = coze.get_dynamic_features(product_nums_1, env)
+        log.info(f'________dynamic features:{dyna_res}')
         t3 = datetime.now()
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} db.get_dynamic_features costs {t3 - t2}')
-        # step 3. filter by dynamic
-        product_nums_2 = coze.filter_dynamic(condition, dyna_res)['product_nums']
-        log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_dynamic: {product_nums_2}')
+        # step 3. filter by dynamic 暂时不用 dynamic filter
+        # product_nums_2 = coze.filter_dynamic(condition, dyna_res)['product_nums']
+        # log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_dynamic: {product_nums_2}')
+        product_nums_2 = product_nums_1
         if len(product_nums_2) > 0:
             # step 4. 从 db 取 product features，用于 content 过滤
             t4 = datetime.now()
-            prod_res = coze.get_product_features(product_nums_2, env)['products']
+            prod_res = coze.get_product_features(product_nums_2, env)
             log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} db.get_product_features costs {datetime.now() - t4}')
+            log.info(f'________product features:{prod_res}')
+            # todo 有时 get_product_features() 的返回值里不含某个产品，导致下一句出错
+            prod_diff_tmp = {pn for pn in dyna_res} - {pn for pn in prod_res}
+            log.info(f'________product difffffffff: {prod_diff_tmp}')
 
             # step 5. filter by llm_check_products_matched
-            full_features = [(pn, prod_res[pn]['product_feature'] + '\n' + dyna_res[pn]['product_feature']) for pn in product_nums_2]
+            # full_features = [
+            #     (pn, prod_res[pn]['product_feature'] + '\n' + dyna_res[pn]['product_feature'], dyna_res[pn]['cals'])
+            #     for pn in product_nums_2 if pn in prod_res and pn in dyna_res
+            # ]
+
+            # step 5. 新方法：dynamic 为 dict
+            full_features = [
+                (pn, prod_res[pn]['product_feature'], dyna_res[pn]['product_feature_dict'])
+                for pn in product_nums_2 if pn in prod_res and pn in dyna_res
+            ]
+            log.info(f'________________full_features:{full_features}')
             t5 = datetime.now()
             model_name = config['model_product_matched']
             product_nums_3 = llm.check_products_matched(recent_messages, full_features, task_id, model_name)
@@ -192,11 +208,19 @@ def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_in
     log.info(f'/get_task_id {task_id} retrieve_products_kb_db total costs {datetime.now() - t0}')
     if found:
         product_nums_3 = product_nums_3[:max_num]
-        prod_res_3 = [prod_res[pn] for pn in product_nums_3]
-        dyna_res_3 = [dyna_res[pn] for pn in product_nums_3]
+        log.info(f'______prod_nums_3:{product_nums_3}')
+        # prod_res_3 = [prod_res[pn] for pn in product_nums_3]
+        # dyna_res_3 = [dyna_res[pn] for pn in product_nums_3]
         return product_nums_3, prod_res, dyna_res
     else:
-        return [], [], []
+        # 全军覆没。从最后一轮从 kb 里取出的里面选 2 个。
+        product_nums_3 = product_nums_0[:2]
+        dyna_res = coze.get_dynamic_features(product_nums_1, env)
+        for i in dyna_res:
+            i['cals']['back_filled'] = True
+        prod_res = coze.get_product_features(product_nums_2, env)
+        # to do: 可能没有
+        return product_nums_3, prod_res, dyna_res
 
 def retrieve_products_db(task_id: str, product_nums: list):
     log.info(f'/get_task_id {task_id} retrieve_product_db product_nums:{product_nums}')
@@ -204,7 +228,9 @@ def retrieve_products_db(task_id: str, product_nums: list):
         return [], []
     env = config['env']
     t0 = datetime.now()
-    dyna_res = coze.get_dynamic_features(product_nums, env)['products']
+    dyna_res = coze.get_dynamic_features(product_nums, env)
+    for i in dyna_res:
+        i['cals']['user_preferred'] = True
     log.info(f'/get_task_id {task_id} db.get_dynamic_features costs {datetime.now() - t0}')
 
     # 过滤掉不在 db 里（也就是，不在返回的 dyna_res 里）的 product_num
@@ -212,7 +238,7 @@ def retrieve_products_db(task_id: str, product_nums: list):
     log.info(f'/get_task_id {task_id} retrieve_products_db final_product_nums:{product_nums}')
 
     t0 = datetime.now()
-    prod_res = coze.get_product_features(product_nums, env)['products']
+    prod_res = coze.get_product_features(product_nums, env)
     log.info(f'/get_task_id {task_id} db.get_product_features costs {datetime.now() - t0}')
     return product_nums, prod_res, dyna_res
 
@@ -233,10 +259,12 @@ def retrieve_products_bg(task_id: str, request):
         # 用户点名的，即使有不合适的，也不滤掉。不合适的原因应该会出现在 content 里
         # 但若 analyze_user_input 时识别 product_nums 出错，可能出现 product_num 不在 db 里的情况。
         #   这种需要滤掉（在 retrieve_products_db 时滤掉的）。此时只能请用户重新查询了。
+        # todo: 万一全被滤掉，得滥竽一下
         product_nums_preferred = user_summary_intention['product_nums']
         product_nums, prod_res, dyna_res = retrieve_products_db(task_id, product_nums_preferred)
     else: # 1:用户希望推荐更多，或 0:其他
         product_nums, prod_res, dyna_res = retrieve_products_kb_db(task_id, request.maxNum, recent_messages, user_input_summary, condition)
+
 
     log.info(f'/get_task_id {task_id} final product nums:{product_nums}')
     if len(product_nums) == 0:
@@ -247,7 +275,7 @@ def retrieve_products_bg(task_id: str, request):
             'product_feature' : prod_res[pn]['product_feature'],
             'dynamic_feature' : dyna_res[pn]['product_feature'],
             'full_feature' : prod_res[pn]['product_feature'] + '\n' + dyna_res[pn]['product_feature'],
-            'cals' : dyna_res[pn]['cals']
+            'cals' : dyna_res[pn]['cals'],
         } for pn in product_nums]
         log.info(f'__product_infos: {product_infos}')
 
@@ -283,27 +311,11 @@ def get_query_message(messages, n=10):
     return "\n".join(msg["content"] for msg in turns_ordered if msg.get("content"))
 
 
-'''
-coze workflow 的一些逻辑
-
-批处理中，
-    product_feature = product_feature + "\n" + str(dynamic_feature)
-后两者分别来自 get_product_feature() 和 get_dynamic_feature()，
-都已经是字符串（所以 dynamic_feature 其实没必要再 str() 一下）
-注意: dynamic 中不含 cal（数字化的原始动态feature）
-
-批处理之后，「按 score 排序且驼峰」中
-先按 score 排序各产品，再把所有产品的 feature（批处理中已经拼接好的 product + dynamic）连接起来，
-得到一个包括所有产品的静态、动态 feature 的大字符串
-    product_features_str = "\n\n".join(product_features_sorted)
-该大字符串，用于调用大模型得到 summary
-'''
-
 async def get_summary(task_id: str):
     log.info(f'/get_summary_result {task_id} get_summary() begins')
     start_time = datetime.now()
-    timeout = timedelta(seconds=60)
-    poll_interval = 0.2 # seconds
+    timeout = timedelta(seconds=120)
+    poll_interval = 0.5 # seconds
 
     data_ready = False
     while datetime.now() - start_time < timeout:
@@ -356,6 +368,7 @@ async def get_summary(task_id: str):
 
     #
     # todo 优化这个 prompt
+    # todo 没有用到 cals 中的 user_preferred 和 lanyu 属性，也没判断产品是否没有动态特征
     #
     prompt = f'''
 根据用户的对话历史，总结出用户的旅行需求。然后根据各产品信息，向用户推荐最合适的若干个产品。
@@ -392,7 +405,7 @@ async def get_summary(task_id: str):
         if cnt == 1:
             t1 = datetime.now()
             log.info(f'/get_summary_result {task_id} {model_name} first chunk arrived. costs first {t1 - t0}, wait+first {t1 - start_time}')
-        # log.info(f'/get_summary_result {task_id} chunk {cnt}')
+        # log.info(f'/get_summary_result chunk {cnt-1} _{item.strip()}_')
         yield item
     t2 = datetime.now()
     log.info(f'/get_summary_result {task_id} {model_name} all chunks arrived. cost all {t2 - t1}, wait+first+all {t2 - start_time}')

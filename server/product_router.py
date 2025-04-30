@@ -119,7 +119,12 @@ async def get_summary_result(request: Request, task_request: TaskRequest):
             finally:
                 log.info(f'/get_summary_result {task_id} summary: {buffer}')
 
-        return StreamingResponse(event_stream(), media_type='text/event-stream')
+        headers = {
+            "Cache-Control": "no-cache",  # 禁用客户端缓存
+            "X-Accel-Buffering": "no",  # 禁用Nginx等代理缓冲
+            # "Connection": "keep-alive"  # 保持长连接
+        }
+        return StreamingResponse(event_stream(), media_type='text/event-stream', headers=headers)
     except Exception as e:
         trace_info = traceback.format_exc()
         log.error(f'Exception for /get_summary_result {task_id}, e: {e}, trace: {trace_info}')

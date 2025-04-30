@@ -75,10 +75,11 @@ def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
 def field_valid(d: dict, key: str) -> bool:
     return key in d and d[key] != ''
 
+# 只用在生成 dynamic feature
 def get_field_str(d: dict, key: str) -> str:
     return str(d[key]) if field_valid(d, key) else ''
 
-def get_feature_desc(product_detail, intro, parent_key, keys=None):
+def get_feature_desc(product_detail, intro, parent_key, keys=None) -> str:
     if not product_detail or not parent_key:
         return ""
 
@@ -152,10 +153,13 @@ def get_dynamic_feature(product_num: str, env: str):
         if data is None:
             return {}
         lines = data["lineList"]
+        log.info(f'____________raw dynamic lines:{lines}')
         cals = []
+        out_features = {}
         for line in lines:
             trip_days_str = get_field_str(line, 'tripDays') # 原为 int 类型
             trip_nights_str = get_field_str(line, 'tripNight') # 原为 int 类型
+            cnt = 0
             for cal in line["calList"]:
                 if cal['isOpen'] == 1:
                     out_cal = {}
@@ -163,19 +167,36 @@ def get_dynamic_feature(product_num: str, env: str):
                     out_cal["depart_date"] = cal['departDate']
                     out_cal["back_date"] = cal['calBackDate']
                     out_cal['trip_days'] = trip_days_str
-                    out_cal['trip_nights'] = trip_nights_str
+                    # out_cal['trip_nights'] = trip_nights_str
                     out_cal["stock"] = get_field_str(cal, 'stock') # 原为 int 类型
                     cals.append(out_cal)
+
                     product_features.append(get_feature_desc(cal, "成人售价", 'adultSalePrice'))
                     product_features.append(get_feature_desc(cal, "出发日期", 'departDate'))
                     product_features.append(get_feature_desc(cal, "返回日期", 'calBackDate'))
-                    # product_features.append(get_feature_desc(cal, "旅行天数", 'tripDays'))
+                    product_features.append(get_feature_desc(cal, "旅行天数", 'tripDays'))
                     # product_features.append(get_feature_desc(cal, "旅行夜数", 'tripNight'))
                     product_features.append(get_feature_desc(cal, "存量", 'stock'))
+
+                    out_feature = {
+                        '成人售价' : get_field_str(cal, 'adultSalePrice'),
+                        '出发日期' : get_field_str(cal, 'departDate'),
+                        '返回日期' : get_field_str(cal, 'calBackDate'),
+                        '旅行天数' : trip_days_str,
+                        # '旅行夜数' : trip_nights_str,
+                        '存量' : get_field_str(cal, 'stock'),
+                    }
+                    cnt += 1
+                    out_features[f'分组{cnt}'] = out_feature
         product_feature_str = '\n'.join(product_features)
     except Exception:
         return {}
-    return {"cals": cals, "product_num": product_num, "product_feature": product_feature_str}
+    return {
+        "cals": cals,
+        "product_num": product_num,
+        "product_feature": product_feature_str,
+        "product_feature_dict" : out_features
+    }
 
 ####
 
@@ -262,12 +283,12 @@ def get_product_feature(product_num: str, env: str):
 
 
 # helper
-def batch_features(product_nums: list, env: str, func):
+def batch_features(product_nums: list, env: str, func) -> dict:
     products = {}
     #
     # todo 并发数量应该多少？
     #
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=10) as executor:
         # map<future, to_add_name_list>
         futures = {executor.submit(func, pn, env): pn for pn in product_nums}
 
@@ -281,7 +302,7 @@ def batch_features(product_nums: list, env: str, func):
                 trace_info = traceback.format_exc()
                 info = f'Exception for batch_features, e:{e}, prod_num:{futures[f]}, trace: {trace_info}'
                 print(f'__exception: {info}')
-    return {'products': products}
+    return products
 
 def get_dynamic_features(product_nums: list, env: str):
     # products = { pn : get_dynamic_feature(pn, env) for pn in product_nums }

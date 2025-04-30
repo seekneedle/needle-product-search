@@ -29,6 +29,7 @@ def qwen_call(messages, return_type: str, task_id: str, job_name: str, model_nam
             response_format={'type': return_type}
         )
         log.info(f'{task_id} {model_name} {job_name} done, cost {datetime.now() - t0}')
+        log.info(f'{task_id} {model_name} {job_name} request_id: {completion.id}, usage: {completion.usage}')
         return completion.choices[0].message.content
     except APIError as e:
         log.info(f'{task_id} {model_name} {job_name} APIError: {e.status_code}, {e.code}, {e.message}')
@@ -44,15 +45,25 @@ def qwen_stream_call(messages, queue, model_name: str):
         model=model_name,
         messages=messages,
         stream=True,
-        stream_options={'include_usage': False} # 不需要得到 token 使用情况统计
+        stream_options={'include_usage': True} # 得到 token 使用情况统计
     ) # 貌似是第一个 chunk 返回时才返回
+    cnt = 0
+    last_chunk = None
     for chunk in completion:
+        last_chunk = chunk
+        # log.info(f'stream raw chunk: {chunk}')
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
         if delta.content is not None: # 真正的回复
             queue.put(f'data: {delta.content}\n\n')
+            # log.info(f'qwen_stream_call {model_name} WRAPPER chunk {cnt}: _{delta.content}_')
+            cnt += 1
     queue.put(None)
+    # 每个 chunk，都含同样的 id
+    # 最后一个 chunk，choices 为空列表，usage 包含本次请求所使用的 token 量。
+    log.info(f'{model_name} request_id: {last_chunk.id}, usage: {last_chunk.usage}')
+
 
 # wrapper for qwen_stream_call()
 async def stream_generate_ex(messages, task_id: str, job_name: str, model_name: str):
@@ -73,9 +84,10 @@ async def stream_generate_ex(messages, task_id: str, job_name: str, model_name: 
             )
             if cnt == 0:
                 log.info(f'stream_call {task_id} {model_name} {job_name} WRAPPER first chunk received')
-            cnt += 1
             if data is None: # 结束信号
                 break
+            # log.info(f'stream_call {model_name} {job_name} WRAPPER chunk {cnt}: _{data.strip()}_')
+            cnt += 1
             yield data  # 返回 SSE 数据
     finally:
         process.join()  # 确保进程退出
@@ -248,16 +260,83 @@ def analyze_user_input(recent_messages: list, task_id: str, model_name: str):
 
     return condition, user_summary_intention
 
-def to_match_prompt(recent_messages, feature: str) -> list:
+def to_match_prompt_old(recent_messages, feature: str) -> list:
     # 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
     prompt = f'''
         根据用户的对话历史，看给定的一个产品描述是否满足用户的旅游需求。结果放到 json 对象中，结构化返回。
         是否满足需求，放到 matched 变量中；原因，放到 reason 变量中。
+        判断时的一些参考：
+        - 目的地，若用户说“目的地不限制”，则理解为“目的地是哪儿都行”，此时不用判断目的地是否符合。
+        - 出发地，若用户说“出发地不限制”，则理解为“出发地是哪儿都行”，此时不用判断出发地是否符合。
+        - 价格，若用户没有明确要求低于或高于某个价格，则理解为该价格左右，范围为该价格上下浮动 20%。例如，若用户要求价格是两万，则理解为价格应该在 16000 到 24000 之间。
+        - 价格，如果用户要求“某价格多”，请参照例子理解：例如“两万多”，理解为“两万到三万之间”。例如“八千多”，理解为“八千到九千之间”。
+        
+
         用户的对话历史：{recent_messages}
         旅游产品描述如下，只是一个产品：{feature}
     '''
     llm_messages = [{'role': 'user', 'content': prompt}]
     return llm_messages
+
+
+def to_match_prompt(recent_messages, feature: str, dynamic_feature: dict) -> list:
+    # 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
+    prompt = f'''
+        #背景#
+        一位顾客与一位旅游行业客服人员进行了对话。
+        请你根据这段对话，提取出该顾客的旅游需求，
+        然后判断给定的一个产品描述（静态特征、动态特征）是否满足该顾客的旅游需求。
+
+        以下为这段对话，其中 user 为顾客，assistant 为客服人员。
+
+        ======
+        {recent_messages}
+        ======
+
+        给定的一个旅游产品的静态特征是：
+        
+        ======
+        {feature}
+        ======
+
+        该旅游产品的动态特征是：
+        
+        ======
+        {dynamic_feature}
+        ======
+        
+        动态特征用来判断本产品在成人售价、出发日期、返回日期、旅行天数、旅行夜数、存量
+        这几个方面否符合顾客的需求。静态特征用来判断本产品是否符合顾客的其他需求。
+        
+        动态特征分为若干“分组”，每个分组包括成人售价、出发日期、返回日期、旅行天数、旅行夜数、存量这几个信息。
+        判断方法：
+        若动态特征缺失（不含任何分组），则直接认为动态特征满足了顾客的这些需求。
+        否则（动态特征不缺失，含若干分组）：
+          只要其中任何一组满足顾客的需求，就认为动态特征满足了顾客的这些需求。
+          若所有这些分组都不满足顾客的需求，则认为动态特征不满足顾客的需求。
+
+        #输出格式#
+        判断结果放到 json 对象中，结构化返回。该 json 对象含以下字段：
+        1. intent：字符串类型，返回提取出来的该顾客的旅游需求
+        2. matched：布尔类型，表示该旅游产品是否满足顾客的需求
+        3. reason：字符串类型，返回做出这样判断的原因
+        4. dynamic：字典类型，返回动态特征里所有满足顾客需求的分组。若产品的动态特征本来就不含任何分组，则这里返回空。
+        5. tourists：整数类型，返回出行人数
+        6. days：[int, int] 类型，返回顾客希望的旅行天数
+        7. price_range: [int, int] 类型，返回顾客希望的价格范围
+
+        #提取顾客需求时的一些原则#
+        - 目的地，若用户说“目的地不限制”，则理解为“目的地是哪儿都行”，此时不用判断目的地是否符合。
+        - 出发地，若用户说“出发地不限制”，则理解为“出发地是哪儿都行”，此时不用判断出发地是否符合。
+        - 旅行时长，若顾客没有明确要求少于或多于某天数，则理解为该天数左右，范围为该天数上下浮动 20%，向上取整。例如，若顾客要求玩一周，则应该理解为玩 5 到 9 天。
+        - 出行人数：若顾客没提到人数，则认为只有一人。出行人数需要小于等于产品的“存量”，才能认为满足顾客的需求。
+        - 价格，若顾客没有明确要求低于或高于某个价格，则理解为该价格左右，范围为该价格上下浮动 20%。例如，若顾客要求价格是两万，则理解为价格应该在 16000 到 24000 之间。
+        - 价格，若顾客要求“某价格多”，请参照例子理解：例如“两万多”，理解为“两万到三万之间”。例如“八千多”，理解为“八千到九千之间”。
+        - 价格，顾客提到的价格应该理解为总价。与动态特征比较时，应该用动态特征里的“成人售价”乘以出行人数，再比较。
+    '''
+    llm_messages = [{'role': 'user', 'content': prompt}]
+    return llm_messages
+
 
 def check_products_matched(recent_messages, full_features, task_id: str, model_name: str):
     if len(full_features) == 0:
@@ -266,20 +345,20 @@ def check_products_matched(recent_messages, full_features, task_id: str, model_n
     matched_product_nums = []
     with ThreadPoolExecutor(max_workers=len(full_features)) as executor:
         futures = {executor.submit(
-            qwen_call, to_match_prompt(recent_messages, feature),
+            qwen_call, to_match_prompt(recent_messages, feature, dynamic_feature),
             'json_object', task_id, f'{pn} if_matched', model_name
-        ): pn for pn, feature in full_features}
+        ): (pn, dynamic_feature) for pn, feature, dynamic_feature in full_features}
 
         for f in as_completed(futures):
-            prod_name = futures[f]
+            prod_name, dynamic_feature = futures[f]
             try:
                 if f.result() == '': # 出错，只能跳过，无其他办法
                     log.info(f'{task_id} {model_name} {prod_name} if_matched wrong. skipped.')
                     continue
                 res = json.loads(f.result())
-                log.info(f'{task_id} {model_name} {prod_name} if_matched result:{res}')
+                log.info(f'{task_id} {model_name} {prod_name} if_matched result:{res}. cals:{dynamic_feature}')
                 if res['matched']:
-                    matched_product_nums.append(futures[f])
+                    matched_product_nums.append(futures[f][0])
             except Exception as e:
                 trace_info = traceback.format_exc()
                 info = f'Exception for batch_features, e:{e}, prod_num:{prod_name}, trace: {trace_info}'
@@ -288,6 +367,7 @@ def check_products_matched(recent_messages, full_features, task_id: str, model_n
 
 def to_content_prompt(recent_messages, feature: str) -> list:
     # 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
+    # todo 没有用到 cals 中的 user_preferred 和 lanyu 属性，也没判断产品是否没有动态特征
     prompt = f'''
         结构化返回，结果放到 json 对象中，其中有且只有两个字段：content 和 score。
         根据产品信息，结合用户聊天历史中的需求，
