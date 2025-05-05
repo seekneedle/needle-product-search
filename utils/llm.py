@@ -93,113 +93,106 @@ async def stream_generate_ex(messages, task_id: str, job_name: str, model_name: 
         process.join()  # 确保进程退出
 
 
-'''
-# original by huaxing. not used.
-async def stream_generate(messages):
-    completion = client.chat.completions.create(
-        model='qwen-plus-2024-09-19',
-        messages=messages,
-        stream=True,
-        stream_options={'include_usage': True}
-    )
-    for chunk in completion:
-        if len(chunk.choices) > 0:
-            yield f'data: {chunk.choices[0].delta.content}\n\n'
 
-# log 很多的版本，暂存一阵
-def qwen_stream_call_logs(messages, queue):
-    log.info('__qwen_stream_call get_summary REALLY before calling qwen')
-    t0 = datetime.now()
-    completion = client.chat.completions.create(
-        # model='qwen-plus-2024-09-19',
-        # model='qwq-plus',
-        model='qwen-plus',
-        # model='qwen-turbo',
-        messages=messages,
-        stream=True, # QwQ 模型仅支持流式输出方式调用
-        stream_options={'include_usage': False} # 不需要得到 token 使用情况统计
-    ) # 貌似是第一个 chunk 返回时才返回
-    log.info('__qwen_stream_call get_summary REALLY after calling qwen')
-    # first_arrived = False
-    # first_reason_arrived = False
-    first_content_arrived = False
-    for chunk in completion:
-        # if not first_arrived:
-        #     first_arrived = True
-        #     log.info(f'__qwen_stream_call get_summary REALLY chunk: first costs {datetime.now() - t0}')
-        if not chunk.choices:
-            # log.info(f'__qwen_stream_call get_summary usage:{chunk.usage}')
-            continue
-        delta = chunk.choices[0].delta
-        if hasattr(delta, 'reasoning_content') and delta.reasoning_content is not None:
-            # 思考过程。qwq 有，qwen-* 无。此时 delta.content 值为 None。
-            pass
-            # if not first_reason_arrived:
-            #     first_reason_arrived = True
-            #     log.info(f'__qwen_stream_call get_summary REALLY chunk: first reason costs {datetime.now() - t0}')
-        else:
-            # 真正的回复
-            if not first_content_arrived:
-                first_content_arrived = True
-                log.info(f'__qwen_stream_call get_summary REALLY chunk: first content costs {datetime.now() - t0}')
-            queue.put(f'data: {delta.content}\n\n')
-    queue.put(None)
-'''
 
-#
-# 目前只用到了 user_intention
-#
-def analyze_user_input(recent_messages: list, task_id: str, model_name: str):
-    # prompt_user_input = f'''
-    #     根据用户聊天历史，总结用户对旅行产品的需求。要以用户的口吻输出，不要以客服人员的角度总结。
-    #     如果总结中涉及到已推荐产品，要带上产品编号，但不要带其标题。
-    #     如果不涉及已推荐产品，就不用说"目前没有提到具体推荐的产品编号"这样的话。
-    #     输出文字要平实，不要带文学色彩。要简短，不要啰嗦。
-    #     用户聊天历史记录为：{recent_messages}
-    # '''
+def to_condition_dates_prompt(recent_messages: list) -> str:
+    weekdays_chinese = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"]
+    weekday_num = int(datetime.now().strftime("%w")) # 0（周日）到 6（周六）
+    today_str = datetime.now().strftime("%Y年%m月%d日") + weekdays_chinese[weekday_num]
+    print(f'____messages: {recent_messages}')
 
     prompt_condition = f'''
-        ### 角色
-        根据客户user的聊天历史，总结客户对于出行时间、产品价格、产品存量的需求，放到 json 对象中，结构化返回。
+        #背景和需求#
+        请根据顾客与旅游行业客服人员的对话，提取出该顾客对出发日期和返回日期的需求。
+        两者都有可能是个日期范围，也都有可能是确定的某天。都有可能是精确的，也有可能是模糊的。
+        为此，出发日期对应两个字段，depart_date_min 和 depart_date_max，分别是日期范围的下界和上界。
+        返回日期也对应两个字段，back_date_min 和 back_date_max，分别是日期范围的下界和上界。
+        各日期的提取格式为 yyyy-MM-dd，比如：2025-06-29。
 
-        注意，提取各种时间时，
+        以下为这段对话，其中 user 为顾客，assistant 为客服人员。
 
-        ### 能力1：提取产品出行时间要求
-        1. 根据聊天历史，提取客户希望的出发时间到 depart_date，如果没有提及出发时间，则输出空。
-        2. 根据聊天历史，提取客户希望的返回时间到 back_date，如果没有提及返回时间，则输出空。
-        3. 提取格式为 yyyy-MM-dd，比如：2025-06-29。
-        4. 如果用户提到的日期没说是哪年，则认为是今年。若没说是几月，则认为是这个月。
-
-        ### 能力2：提取产品的时长
-        1. 根据聊天历史，提取客户要求的最少旅游多少天，放到 min_days。若未提及，则输出 0
-        2. 根据聊天历史，提取客户要求的最多旅游多少天。放到 max_days。若未提及，则输出 0
-
-        ### 能力3：提取产品存量要求
-        1. 根据聊天历史，提取客户要求的最少存量，放入 stock 里。存量不能小于 1。
-        2. 如果用户没有提及最小存量，默认为 1。
-        3. 输出存量必须是整数。
-
-        ### 能力4：提取产品价格要求
-        1. 根据聊天历史，提取客户要求的最低价格，放到 min_price 里。若未提及最低价格，则最低价格输出 0。
-        2. 根据聊天历史，提取客户要求的最高价格，放到 max_price 里。若未提及最高价格，则最高价格输出 0。
-
-        ### 限制
-        1. 不允许编造内容。
-        2. 必须严格按客户聊天历史中的信息进行提取。
-
-        ### 用户聊天历史
-
+        ======
         {recent_messages}
-    '''
+        ======
 
-    # prompt_user_intention = f'''
-    #     根据用户聊天历史，判断用户最后的意图。结果放到 json 对象中，结构化返回。
-    #     如果用户感觉以前系统推荐的产品不太合适、或者不够多，希望再推荐些其他产品，返回 intention = 1。
-    #     如果用户表示出对某个或某几个产品的肯定，或进一步询问已推荐的一个或几个产品的详细信息（如出发日期、价格、特点等），或想对比几个已推荐产品的某些特点，返回 intention = 2，并将用户指定的诸产品放入 product_nums 列表中。
-    #     如果是其他意图，返回 intention = 0。
-    #     并将理由放在 reason 中。
-    #     用户聊天历史记录为：{recent_messages}
-    # '''
+        #输出格式#
+        提取结果放到 json 对象中，结构化返回。以下为该 json 对象所含字段及其默认值。
+        各字段都是字符串类型，格式都是 yyyy-MM-dd，默认值都是空串。 
+        - depart_date_min
+        - depart_date_max
+        - back_date_min
+        - back_date_max
+
+        #背景知识#
+        a. 今天日期为 {today_str}
+        c. 2025 年的部分公共假期：
+          c.1. 劳动节：5月1日至5日
+          c.2. 端午节：5月31日至6月2日
+          c.3. 国庆节、中秋节：10月1日至8日。中秋节是10月6日，与国庆假期重合。
+          c.4. 寒假：1月15日到2月15日，暑假：7月1日到8月30日。
+        d. 2026 年的部分公共假期：
+          d.1. 元旦：1月1日
+          d.2. 春节：2月16日到23日
+          d.3. 清明节：4月4日到6日
+          d.4. 寒假：1月15日到2月15日，暑假：7月1日到8月30日。
+
+        #几个原则#
+        1. 只考虑顾客直接提到的出发、返回日期。不要根据出发日期和旅行时长推算返回日期。
+        2. 顾客提到的日期，应按“离现在最近的将来的某日期”也就是“即将来到的某日期”这一原则理解。
+        3. 类似“本月”、“这个月20号”、“下个月”、“下个月中旬”、“下下个月”、“下周”、“明年”等相对日期，
+           应该根据背景知识里提到的今天日期，推算出其指代的具体日期或日期范围。
+        4. “五一”是指“五一劳动节假期”这样一个范围，而不是仅“5月1日这一天”。
+           “十一”是指“国庆节假期”这样一个范围，而不是“10月1日这一天”。
+           类似地，“元旦”、“清明”、“端午”、“中秋”、“国庆”、“春节”等也是指对应的假期日期范围，而不是仅节日当天，
+           除非顾客特意明确指出是当天。
+        5. 如果顾客只提到了一个日期（范围），但没有明确说它是出发日期还是返回日期，则认为该日期范围
+           既是出发日期（范围），也是返回日期（范围）。
+        6. 不允许编造内容。必须严格从给定对话内容中提取。
+    '''
+    return prompt_condition
+
+def to_condition_others_prompt(recent_messages: list) -> str:
+    prompt_condition = f'''
+        #背景和需求#
+        根据顾客与旅游行业客服人员的对话，提取出该顾客对出行人数、出行时长、产品价格的需求。
+        不允许编造内容。必须严格从对话内容中提取。
+
+        以下为这段对话，其中 user 为顾客，assistant 为客服人员。
+
+        ======
+        {recent_messages}
+        ======
+
+        #输出格式#
+        提取结果放到 json 对象中，结构化返回。以下为该 json 对象所含字段。
+        它们都是整数类型，默认值都是 0。
+        - tourists
+        - days_min
+        - days_max
+        - price_min
+        - price_max
+
+        #提取顾客的出行人数#
+        1. 提取顾客提到的出行人数，放到 tourists 中。
+        2. 若顾客没提到人数，则认为只有一人。
+
+        #提取顾客希望的出行时长#
+        1. 提取顾客希望的出行时长下限、上限，分别放到 days_min 和 days_max 里。
+        2. 若顾客提到的出行时长是个准确值，不是下限或上限，则同时设置 days_min 和 days_max 为该值。
+        3. 若顾客只提及了下限或上限两者之一，则只设置相应变量，另一个设置为默认值 0。
+
+        #提取顾客希望的价格#
+        1. 若顾客只提到了一个价格，且无法判断是下限还是上限，则同时设置 price_min 和 price_max 为该值。
+        2. 若顾客只提及了下限或上限两者之一，则只设置相应变量，另一个设置为默认值 0。
+        3. 否则，提取顾客希望的价格下限、上限，分别放到 price_min 和 price_max 里。
+    '''
+    return prompt_condition
+
+
+
+def analyze_user_input(recent_messages: list, task_id: str):
+    prompt_condition_dates = to_condition_dates_prompt(recent_messages)
+    prompt_condition_others = to_condition_others_prompt(recent_messages)
 
     prompt_user_summary_intention = f'''
         根据用户聊天历史，总结用户对旅行产品的需求，并判断用户的意图。
@@ -221,66 +214,43 @@ def analyze_user_input(recent_messages: list, task_id: str, model_name: str):
         用户聊天历史记录为：{recent_messages}
     '''
 
-    # messages_user_input = [{'role': 'user', 'content': prompt_user_input}]
-    messages_condition = [{'role': 'user', 'content': prompt_condition}]
-    # messages_user_intention = [{'role': 'user', 'content': prompt_user_intention}]
+    messages_condition_dates = [{'role': 'user', 'content': prompt_condition_dates}]
+    messages_condition_others = [{'role': 'user', 'content': prompt_condition_others}]
     messages_user_summary_intention = [{'role': 'user', 'content': prompt_user_summary_intention}]
 
     with ThreadPoolExecutor(max_workers=4) as executor:
-        # f1 = executor.submit(qwen_call, messages_user_input, 'text', task_id, 'user_input_summary', model_name)  # 提交任务
-        f2 = executor.submit(qwen_call, messages_condition, 'json_object', task_id, 'condition', config['model_user_condition'])
-        # f3 = executor.submit(qwen_call, messages_user_intention, 'json_object', task_id, 'user_intention', model_name)
+        f2 = executor.submit(qwen_call, messages_condition_dates, 'json_object', task_id, 'condition_dates', 'qwen-plus')#config['model_user_condition'])
+        f3 = executor.submit(qwen_call, messages_condition_others, 'json_object', task_id, 'condition_others', 'qwen-plus')
         f4 = executor.submit(qwen_call, messages_user_summary_intention, 'json_object', task_id, 'user_summary_intention', config['model_user_summary_intention'])
 
-    # user_input_summary = f1.result()
-    condition = json.loads(f2.result())
-    # user_intention = json.loads(f3.result())
+    condition_dates = json.loads(f2.result())
+    condition_others = json.loads(f3.result())
     user_summary_intention = json.loads(f4.result())
 
     # 意图识别时，如果没正面提到某些产品，可能没有 product_nums 字段。补一个，以防不测。
-    # if 'product_nums' not in user_intention:
-    #     user_intention['product_nums'] = []
     if 'product_nums' not in user_summary_intention:
         user_summary_intention['product_nums'] = []
 
-    log.info(f'__ condition before adjust: {condition}')
+    log.info(f'__condition_dates: {condition_dates}')
+    log.info(f'__condition_parsed: {condition_others}')
     # qwen-plus 和 qwen-turbo 似乎都认为今年是 2023 年。临时解决方法：year += 2。注意 2024 是闰年。
-    leap_date = datetime(year=2024, month=2, day=29)
-    if condition['depart_date'] != '':
-        depart_date = datetime.strptime(condition['depart_date'], '%Y-%m-%d')
-        if depart_date.year < datetime.now().year:
-            delta = 365 + 366 if depart_date < leap_date else 365 * 2
-            condition['depart_date'] = (depart_date + timedelta(days=delta)).strftime('%Y-%m-%d')
+    # leap_date = datetime(year=2024, month=2, day=29)
+    # if condition['depart_date'] != '':
+    #     depart_date = datetime.strptime(condition['depart_date'], '%Y-%m-%d')
+    #     if depart_date.year < datetime.now().year:
+    #         delta = 365 + 366 if depart_date < leap_date else 365 * 2
+    #         condition['depart_date'] = (depart_date + timedelta(days=delta)).strftime('%Y-%m-%d')
+    #
+    # if condition['back_date'] != '':
+    #     back_date = datetime.strptime(condition['back_date'], '%Y-%m-%d')
+    #     if back_date.year < datetime.now().year:
+    #         delta = 365 + 366 if back_date < leap_date else 365 * 2
+    #         condition['back_date'] = (back_date + timedelta(days=delta)).strftime('%Y-%m-%d')
 
-    if condition['back_date'] != '':
-        back_date = datetime.strptime(condition['back_date'], '%Y-%m-%d')
-        if back_date.year < datetime.now().year:
-            delta = 365 + 366 if back_date < leap_date else 365 * 2
-            condition['back_date'] = (back_date + timedelta(days=delta)).strftime('%Y-%m-%d')
-
-    return condition, user_summary_intention
-
-def to_match_prompt_old(recent_messages, feature: str) -> list:
-    # 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
-    prompt = f'''
-        根据用户的对话历史，看给定的一个产品描述是否满足用户的旅游需求。结果放到 json 对象中，结构化返回。
-        是否满足需求，放到 matched 变量中；原因，放到 reason 变量中。
-        判断时的一些参考：
-        - 目的地，若用户说“目的地不限制”，则理解为“目的地是哪儿都行”，此时不用判断目的地是否符合。
-        - 出发地，若用户说“出发地不限制”，则理解为“出发地是哪儿都行”，此时不用判断出发地是否符合。
-        - 价格，若用户没有明确要求低于或高于某个价格，则理解为该价格左右，范围为该价格上下浮动 20%。例如，若用户要求价格是两万，则理解为价格应该在 16000 到 24000 之间。
-        - 价格，如果用户要求“某价格多”，请参照例子理解：例如“两万多”，理解为“两万到三万之间”。例如“八千多”，理解为“八千到九千之间”。
-        
-
-        用户的对话历史：{recent_messages}
-        旅游产品描述如下，只是一个产品：{feature}
-    '''
-    llm_messages = [{'role': 'user', 'content': prompt}]
-    return llm_messages
-
+    # condition_dates['reason'] += condition_others['reason']
+    return condition_dates | condition_others, user_summary_intention
 
 def to_match_prompt(recent_messages, feature: str, dynamic_feature: dict) -> list:
-    # 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
     prompt = f'''
         #背景#
         一位顾客与一位旅游行业客服人员进行了对话。
@@ -326,6 +296,7 @@ def to_match_prompt(recent_messages, feature: str, dynamic_feature: dict) -> lis
         7. price_range: [int, int] 类型，返回顾客希望的价格范围
 
         #提取顾客需求时的一些原则#
+        - 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
         - 目的地，若用户说“目的地不限制”，则理解为“目的地是哪儿都行”，此时不用判断目的地是否符合。
         - 出发地，若用户说“出发地不限制”，则理解为“出发地是哪儿都行”，此时不用判断出发地是否符合。
         - 旅行时长，若顾客没有明确要求少于或多于某天数，则理解为该天数左右，范围为该天数上下浮动 20%，向上取整。例如，若顾客要求玩一周，则应该理解为玩 5 到 9 天。
@@ -422,81 +393,158 @@ def get_product_contents(recent_messages, prod_infos, task_id: str, model_name: 
                 log.info(f'{task_id} {model_name} {product_num} __content wrong__ manual score: {manual_score}')
     return res_contents
 
+# def my_test(query: str):
+#     request_messages = [
+#         {
+#             "role": "user",
+#             "content": f"您好，{query}有什么推荐吗？"
+#         },
+#     ]
+#     t00 = datetime.now()
+#     task_id = 'mock_task_id_1234'
+#     model_name = 'qwen-turbo'
+#     log.info(f'__ condition query:{query}')
+#     res = analyze_user_input(request_messages, task_id, model_name)
+#     log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
+#     log.info(f'/get_task_id {task_id} {model_name}.condition:{res[0]}')
+#     # log.info(f'/get_task_id {task_id} {model_name}.summary_intention:{res[1]}')
+
 if __name__ == '__main__':
-    task_id = 'mock_task_id_1234'
-    request_messages = [
-        {
-            "role": "user",
-            "content": "您好，想去新加坡和马来西亚，大概一周时间，父母二人带一个十二岁男孩。有什么推荐吗？"
-        },
-        {"role": "assistant",
-         "content": """为你推荐编号为 U174845 的产品，【众信制造：金牌南洋传奇】新加坡+马来西亚北京起止 5 晚 7 天。
-      该产品的线路特色包括双峰塔-国家皇宫-广场-国家艺术馆-CITYWALK 城市单轨车-彩虹阶梯-阿罗街。
-      此外，该产品还包含机票费用、行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、境外旅游人身意外险、行程所含景点（区）门票等。
-      出发地为北京，目的地为亚洲、新加坡。\n\n
-      或者你也可以考虑编号为 U167657 的产品，北京起止【寻味南洋-米其林之旅】新加坡+马来西亚 7 天。
-      该产品有两条线路可供选择，线路 A 是马进新出 CA871，线路 C 是大兴去首都回。产品特色是寻味南洋-米其林之旅，
-      你可以品尝到当地的美食。费用包含机票费用、行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、境外旅游人身意外险、
-      行程所含景点（区）门票等。出发地为北京，目的地为亚洲、马来西亚和亚洲、新加坡。\n\n
-      如果你从河南郑州出发，还可以选择编号为 U179033 的产品，【新加坡乐园 MAX】郑州起止 4 晚 6 天。
-      该产品升级 2 晚国际四星，包含新加坡环球影城+飞禽动物园+日间动物园三大乐园精彩之行。费用包含机票费用、
-      行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、中文导游服务、境外旅游人身意外险、行程所含景点（区）门票等。
-      出发地为河南郑州，目的地为亚洲、新加坡。"""
-         },
-        {
-            "role": "user",
-            "content": "第1个、第三个都还行。麻烦帮我好好规划一下。"  # 这几个都不错。你帮我好好做个比较，我最后从中选一个"
-        }
-    ]
+    pass
 
-    request_messages = [{'role': 'user', 'content': '想要去欧洲度蜜月，大概10天左右'}, {'role': 'assistant',
-                                                                                       'content': '根据用户需求，以下是推荐的产品： 编号为U167001的产品【盈尚·秒杀四国】德国+法国+意大利+瑞士11/12/13天：虽然它不是10天的行程，但其丰富的景点和较为灵活的安排比较相关，适合蜜月旅行。. 编号为U166937的产品【尊悦·王牌四国】一价全含德法意瑞4国13天：这条线路包含了多个著名景点，行程安排较为深入，适合想要在欧洲度过一段浪漫时光的情侣。 编号为U170548的产品【深圳出发】法瑞意德+郁金香一价全含13天：这条线路除了经典的欧洲景点外，还包含了库肯霍夫郁金香公园和哈勒森林风信子等浪漫元素，非常适合蜜月旅行。'},
-                        {'role': 'user', 'content': '哪个适合十一期间的'}]
-
-    t00 = datetime.now()
-    model_name = 'qwen-turbo'
-    res = analyze_user_input(request_messages, task_id, model_name)
-    log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
-    log.info(f'/get_task_id {task_id} {model_name}.condition:{res[0]}')
-    log.info(f'/get_task_id {task_id} {model_name}.summary_intention:{res[1]}')
-    sys.exit(1)
-
-    # dates = [ '一周', '半个月', '三五天', '十天半个月', '七八天', '10天', '3天', ]
-    # dates = [ '今年暑假', '明年春节', '国庆', '五一', '劳动节', '下周', '今年开斋节', ]
-    dates = ['五一']
-
-    for d in dates:
-        # log.info(f'_{d}_')
-        # request_messages = [
-        #     {
-        #         "role": "user",
-        #         "content": f"您好，想{d}期间加坡和马来西亚，大概半个月时间，父母二人带一个十二岁男孩。有什么推荐吗"
-        #     },
-        # ]
-        # request_messages = [
-        #     {'role': 'user', 'content': '有天山相关的旅游产品吗。想五一期间去，玩一周左右吧。'},
-        #     # {"role": "assistant",
-        #     #  "content": "编号为U184563的产品“【杏好遇见】双飞8日游”包含天山天池景点，行程中会游览天山天池风景区，体验瑶池仙境。成人售价4980.0元，出发日期2025-04-08，返回日期2025-04-15，目前有6个库存。"},
-        #     # {'role': 'user', 'content': '这个感觉不太好。再帮我推荐点别的更合适的吧'},
-        # ]
-
-        request_messages = [{'role': 'user', 'content': '想要去欧洲度蜜月，大概10天左右'}, {'role': 'assistant',
-                                                                                   'content': '根据用户需求，以下是推荐的产品： 编号为U167001的产品【盈尚·秒杀四国】德国+法国+意大利+瑞士11/12/13天：虽然它不是10天的行程，但其丰富的景点和较为灵活的安排比较相关，适合蜜月旅行。. 编号为U166937的产品【尊悦·王牌四国】一价全含德法意瑞4国13天：这条线路包含了多个著名景点，行程安排较为深入，适合想要在欧洲度过一段浪漫时光的情侣。 编号为U170548的产品【深圳出发】法瑞意德+郁金香一价全含13天：这条线路除了经典的欧洲景点外，还包含了库肯霍夫郁金香公园和哈勒森林风信子等浪漫元素，非常适合蜜月旅行。'},
-                    {'role': 'user', 'content': '哪个适合十一期间的'}]
-        t00 = datetime.now()
-        model_name = 'qwen-turbo'
-        res = analyze_user_input(request_messages, task_id, model_name)
-        log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
-        log.info(f'/get_task_id {task_id} {model_name}.condition:{res[0]}')
-        log.info(f'/get_task_id {task_id} {model_name}.summary_intention:{res[1]}')
-
-        # import time
-        # time.sleep(1)
-        # t00 = datetime.now()
-        # model_name = 'qwen-turbo'
-        # res = analyze_user_input(request_messages, task_id, model_name)
-        # log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
-        # log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{res[0]}')
-        # log.info(f'/get_task_id {task_id} {model_name}.condition:{res[1]}')
-        # log.info(f'/get_task_id {task_id} {model_name}.intention:{res[2]}')
-        # log.info(f'/get_task_id {task_id} {model_name}.summary_intention:{res[3]}')
+    # task_id = 'mock_task_id_1234'
+    #
+    # days = [
+    #     '一周', '一两周', '半个月', '三五天', '十天半个月', '七八天',
+    #     '十几天', '20 天左右', '10天', '3天'
+    # ]
+    # # {左右, 大约, 大概}
+    #
+    # dates = [
+    #     '七月份一家三口亲子游',
+    #     '想六月份去欧洲玩',
+    #     '想六七月份去欧洲玩',
+    #     '想七八月份去欧洲玩',
+    #     '想七八月去欧洲玩',
+    #     '想五月去欧洲玩', # wrong
+    #     '六月想去德国玩', # wrong
+    #     '六月去德国玩', # wrong
+    #     '六月想去意大利逛', # correct
+    #     '六月想去法国玩', # wrong
+    #     '想八月去欧洲玩',
+    #     '想七月份去澳大利亚转转',
+    #     '有六月去夏威夷的团吗',
+    #     '六七月份想逛逛夏威夷',
+    #     '六七月份想去夏威夷',
+    #
+    #     '想五月出发去欧洲玩',
+    #     '想去欧洲玩，六月去，七月回',
+    #     '想六月份出发去欧洲玩',
+    #     '想六月份去欧洲玩，10号左右去，20号左右回',
+    #     '想去东南亚，5月15日出发',
+    #
+    #     '想快速逛一下新加坡，想周二之前走，有合适的吗',
+    #     '想去东南亚，10号之前走', # 有时搞不清楚是几月
+    #     '想五一之前逛一下新加坡',
+    #
+    #     '想逛逛新加坡，20号之后吧',
+    #     '希望国庆之后去新加坡逛逛',
+    #     '希望国庆假期之后去新加坡逛逛',
+    #
+    #     '想看看泰国，5月10日到20日之间出发',
+    #     '想看看吴哥窟，5月10日到20日之间，有合适的行程吗',
+    #
+    #     '想趁今年暑假去欧洲深度游一圈',
+    #     '希望暑假期间去北欧玩',
+    #     '希望寒假期间去北极圈内探险',
+    #     '寒假想去南极看企鹅',
+    #
+    #     '想明年春节期间参观一下东南亚风情',
+    #     '想过春节的时候去马代玩玩',
+    #
+    #     '我们想元旦去越南玩',
+    #     '我们想元旦假期去看看越南',
+    #
+    #     '我们想清明去柬埔寨玩',
+    #     '我们想清明假期去柬埔寨看看',
+    #
+    #     '有没有端午假期去东南亚的团',
+    #     '东南亚，想端午去，有合适的吗',
+    #
+    #     '想五一去广西桂林',
+    #     '五一假期期间想来个广东全省游',
+    #     '五一期间给安排个出境游呗',
+    #     '有没有劳动节期间去欧洲的团',
+    #
+    #     '十一期间能安排埃及金字塔吗',
+    #     '想国庆期间去迪拜逛一圈，有合适的行程吗',
+    #
+    #     '有中秋假期的越南短期游吗',
+    #     '中秋假期期间想去新加坡',
+    #
+    #     '想圣诞、元旦期间去意大利看看',
+    #     '圣诞节前后，能参观罗马教廷吗',
+    #     '大概圣诞节到元旦期间，能去梵蒂冈吗',
+    #
+    #     '这个月想去马来西亚转转',
+    #     '下个月想去马来西亚逛逛',
+    #
+    #     '对马来西亚感兴趣，有下周的行程吗',
+    #     '有两周之后出发的马来西亚团吗',
+    #
+    #     '有今年开斋节期间的土耳其团吗',
+    #     '开斋节想去土耳其',
+    #     '想体验一下土耳其的斋月风情',
+    #
+    # ]
+    #
+    # prices = [
+    #     '三万', '5000', '30000',
+    #     '三万左右', '大概八千吧', '差不多一万', '差不多一万吧，不能再多了',
+    #     '别超过一万二', '最多两万',
+    #     '三万多吧', '三到五万',
+    #     '两三万吧',
+    #     '一万二到两万之间', '三万起',
+    #     '不用考虑', '越少越好', '不封顶', '不是问题', '不差钱'
+    # ]
+    #
+    # for d in dates:
+    #     # query = f'想{d}去新加坡和马来西亚。'
+    #     query = d
+    #     print(query)
+    #     my_test(query)
+    #     time.sleep(0.5)
+    #
+    # # for p in prices:
+    # #     query = f'想去新加坡和马来西亚，父母二人带一个十二岁男孩，预算{p}。'
+    # #     my_test(query)
+    # #     time.sleep(1)
+    # sys.exit(1)
+    #
+    #
+    # # for d in dates:
+    #     # log.info(f'_{d}_')
+    #     # request_messages = [
+    #     #     {
+    #     #         "role": "user",
+    #     #         "content": f"您好，想{d}期间加坡和马来西亚，大概半个月时间，父母二人带一个十二岁男孩。有什么推荐吗"
+    #     #     },
+    #     # ]
+    #     # request_messages = [
+    #     #     {'role': 'user', 'content': '有天山相关的旅游产品吗。想五一期间去，玩一周左右吧。'},
+    #     #     # {"role": "assistant",
+    #     #     #  "content": "编号为U184563的产品“【杏好遇见】双飞8日游”包含天山天池景点，行程中会游览天山天池风景区，体验瑶池仙境。成人售价4980.0元，出发日期2025-04-08，返回日期2025-04-15，目前有6个库存。"},
+    #     #     # {'role': 'user', 'content': '这个感觉不太好。再帮我推荐点别的更合适的吧'},
+    #     # ]
+    #
+    #     # request_messages = [
+    #     #     {'role': 'user', 'content': '想要去欧洲度蜜月，大概10天左右'},
+    #     #     {'role': 'assistant','content': '根据用户需求，以下是推荐的产品： 编号为U167001的产品【盈尚·秒杀四国】德国+法国+意大利+瑞士11/12/13天：虽然它不是10天的行程，但其丰富的景点和较为灵活的安排比较相关，适合蜜月旅行。. 编号为U166937的产品【尊悦·王牌四国】一价全含德法意瑞4国13天：这条线路包含了多个著名景点，行程安排较为深入，适合想要在欧洲度过一段浪漫时光的情侣。 编号为U170548的产品【深圳出发】法瑞意德+郁金香一价全含13天：这条线路除了经典的欧洲景点外，还包含了库肯霍夫郁金香公园和哈勒森林风信子等浪漫元素，非常适合蜜月旅行。'},
+    #     #     {'role': 'user', 'content': '哪个适合十一期间的'}
+    #     # ]
+    #     # t00 = datetime.now()
+    #     # model_name = 'qwen-turbo'
+    #     # res = analyze_user_input(request_messages, task_id, model_name)
+    #     # log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
+    #     # log.info(f'/get_task_id {task_id} {model_name}.condition:{res[0]}')
+    #     # log.info(f'/get_task_id {task_id} {model_name}.summary_intention:{res[1]}')
