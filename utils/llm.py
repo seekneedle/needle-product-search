@@ -117,7 +117,7 @@ def to_condition_dates_prompt(recent_messages: list) -> str:
 
         #输出格式#
         提取结果放到 json 对象中，结构化返回。以下为该 json 对象所含字段及其默认值。
-        各字段都是字符串类型，格式都是 yyyy-MM-dd，默认值都是空串。 
+        各字段都是字符串类型，格式都是 yyyy-MM-dd，默认值都是空串。
         - depart_date_min
         - depart_date_max
         - back_date_min
@@ -177,9 +177,9 @@ def to_condition_others_prompt(recent_messages: list) -> str:
         2. 若顾客没提到人数，则认为只有一人。
 
         #提取顾客希望的出行时长#
-        1. 提取顾客希望的出行时长下限、上限，分别放到 days_min 和 days_max 里。
-        2. 若顾客提到的出行时长是个准确值，不是下限或上限，则同时设置 days_min 和 days_max 为该值。
-        3. 若顾客只提及了下限或上限两者之一，则只设置相应变量，另一个设置为默认值 0。
+        1. 若顾客只提到了一个时长，且无法判断是下限还是上限，则同时设置 days_min 和 days_max 为该值。
+        2. 若顾客只提及了下限或上限两者之一，则只设置相应变量，另一个设置为默认值 0。
+        3. 否则，提取顾客希望的出行时长下限、上限，分别放到 days_min 和 days_max 里。
 
         #提取顾客希望的价格#
         1. 若顾客只提到了一个价格，且无法判断是下限还是上限，则同时设置 price_min 和 price_max 为该值。
@@ -219,8 +219,8 @@ def analyze_user_input(recent_messages: list, task_id: str):
     messages_user_summary_intention = [{'role': 'user', 'content': prompt_user_summary_intention}]
 
     with ThreadPoolExecutor(max_workers=4) as executor:
-        f2 = executor.submit(qwen_call, messages_condition_dates, 'json_object', task_id, 'condition_dates', 'qwen-plus')#config['model_user_condition'])
-        f3 = executor.submit(qwen_call, messages_condition_others, 'json_object', task_id, 'condition_others', 'qwen-plus')
+        f2 = executor.submit(qwen_call, messages_condition_dates, 'json_object', task_id, 'condition_dates', config['model_user_condition_dates'])
+        f3 = executor.submit(qwen_call, messages_condition_others, 'json_object', task_id, 'condition_others', config['model_user_condition_others'])
         f4 = executor.submit(qwen_call, messages_user_summary_intention, 'json_object', task_id, 'user_summary_intention', config['model_user_summary_intention'])
 
     condition_dates = json.loads(f2.result())
@@ -231,8 +231,6 @@ def analyze_user_input(recent_messages: list, task_id: str):
     if 'product_nums' not in user_summary_intention:
         user_summary_intention['product_nums'] = []
 
-    log.info(f'__condition_dates: {condition_dates}')
-    log.info(f'__condition_parsed: {condition_others}')
     # qwen-plus 和 qwen-turbo 似乎都认为今年是 2023 年。临时解决方法：year += 2。注意 2024 是闰年。
     # leap_date = datetime(year=2024, month=2, day=29)
     # if condition['depart_date'] != '':
@@ -247,66 +245,32 @@ def analyze_user_input(recent_messages: list, task_id: str):
     #         delta = 365 + 366 if back_date < leap_date else 365 * 2
     #         condition['back_date'] = (back_date + timedelta(days=delta)).strftime('%Y-%m-%d')
 
-    # condition_dates['reason'] += condition_others['reason']
+    # log.info(f'__condition_dates: {condition_dates}')
+    # log.info(f'__condition_parsed: {condition_others}')
     return condition_dates | condition_others, user_summary_intention
 
-def to_match_prompt(recent_messages, feature: str, dynamic_feature: dict) -> list:
-    prompt = f'''
-        #背景#
-        一位顾客与一位旅游行业客服人员进行了对话。
-        请你根据这段对话，提取出该顾客的旅游需求，
-        然后判断给定的一个产品描述（静态特征、动态特征）是否满足该顾客的旅游需求。
+def to_match_prompt(recent_messages, feature: str) -> list:
+        prompt = f'''
+            根据顾客与旅游行业客服人员的对话内容，判断给定的产品描述是否满足用户的旅游需求。
+            如果顾客的需求里对产品数量有要求（类似“给我推荐10个候选产品”这样的），不用管，只看给定的这一个产品是否满足。
+            判断时，不用考虑出发日期、返回时期、旅行天数、旅行晚数、人数、价钱这些条件，而是认为这些条件全都满足。
 
-        以下为这段对话，其中 user 为顾客，assistant 为客服人员。
+            结果放到 json 对象中，结构化返回。含如下字段：
+            1. matched：布尔类型，表示是否满足需求
+            2. reason：字符串类型，表示做出判断的原因
 
-        ======
-        {recent_messages}
-        ======
+            顾客与客服人员的对话内容：
+            ======
+            {recent_messages}
+            ======
 
-        给定的一个旅游产品的静态特征是：
-        
-        ======
-        {feature}
-        ======
-
-        该旅游产品的动态特征是：
-        
-        ======
-        {dynamic_feature}
-        ======
-        
-        动态特征用来判断本产品在成人售价、出发日期、返回日期、旅行天数、旅行夜数、存量
-        这几个方面否符合顾客的需求。静态特征用来判断本产品是否符合顾客的其他需求。
-        
-        动态特征分为若干“分组”，每个分组包括成人售价、出发日期、返回日期、旅行天数、旅行夜数、存量这几个信息。
-        判断方法：
-        若动态特征缺失（不含任何分组），则直接认为动态特征满足了顾客的这些需求。
-        否则（动态特征不缺失，含若干分组）：
-          只要其中任何一组满足顾客的需求，就认为动态特征满足了顾客的这些需求。
-          若所有这些分组都不满足顾客的需求，则认为动态特征不满足顾客的需求。
-
-        #输出格式#
-        判断结果放到 json 对象中，结构化返回。该 json 对象含以下字段：
-        1. intent：字符串类型，返回提取出来的该顾客的旅游需求
-        2. matched：布尔类型，表示该旅游产品是否满足顾客的需求
-        3. reason：字符串类型，返回做出这样判断的原因
-        4. dynamic：字典类型，返回动态特征里所有满足顾客需求的分组。若产品的动态特征本来就不含任何分组，则这里返回空。
-        5. tourists：整数类型，返回出行人数
-        6. days：[int, int] 类型，返回顾客希望的旅行天数
-        7. price_range: [int, int] 类型，返回顾客希望的价格范围
-
-        #提取顾客需求时的一些原则#
-        - 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
-        - 目的地，若用户说“目的地不限制”，则理解为“目的地是哪儿都行”，此时不用判断目的地是否符合。
-        - 出发地，若用户说“出发地不限制”，则理解为“出发地是哪儿都行”，此时不用判断出发地是否符合。
-        - 旅行时长，若顾客没有明确要求少于或多于某天数，则理解为该天数左右，范围为该天数上下浮动 20%，向上取整。例如，若顾客要求玩一周，则应该理解为玩 5 到 9 天。
-        - 出行人数：若顾客没提到人数，则认为只有一人。出行人数需要小于等于产品的“存量”，才能认为满足顾客的需求。
-        - 价格，若顾客没有明确要求低于或高于某个价格，则理解为该价格左右，范围为该价格上下浮动 20%。例如，若顾客要求价格是两万，则理解为价格应该在 16000 到 24000 之间。
-        - 价格，若顾客要求“某价格多”，请参照例子理解：例如“两万多”，理解为“两万到三万之间”。例如“八千多”，理解为“八千到九千之间”。
-        - 价格，顾客提到的价格应该理解为总价。与动态特征比较时，应该用动态特征里的“成人售价”乘以出行人数，再比较。
-    '''
-    llm_messages = [{'role': 'user', 'content': prompt}]
-    return llm_messages
+            旅游产品描述如下：
+            ======
+            {feature}
+            ======
+        '''
+        llm_messages = [{'role': 'user', 'content': prompt}]
+        return llm_messages
 
 
 def check_products_matched(recent_messages, full_features, task_id: str, model_name: str):
@@ -316,20 +280,20 @@ def check_products_matched(recent_messages, full_features, task_id: str, model_n
     matched_product_nums = []
     with ThreadPoolExecutor(max_workers=len(full_features)) as executor:
         futures = {executor.submit(
-            qwen_call, to_match_prompt(recent_messages, feature, dynamic_feature),
+            qwen_call, to_match_prompt(recent_messages, feature),
             'json_object', task_id, f'{pn} if_matched', model_name
-        ): (pn, dynamic_feature) for pn, feature, dynamic_feature in full_features}
+        ): pn for pn, feature in full_features}
 
         for f in as_completed(futures):
-            prod_name, dynamic_feature = futures[f]
+            prod_name = futures[f]
             try:
                 if f.result() == '': # 出错，只能跳过，无其他办法
                     log.info(f'{task_id} {model_name} {prod_name} if_matched wrong. skipped.')
                     continue
                 res = json.loads(f.result())
-                log.info(f'{task_id} {model_name} {prod_name} if_matched result:{res}. cals:{dynamic_feature}')
+                log.info(f'{task_id} {model_name} {prod_name} if_matched result:{res}')
                 if res['matched']:
-                    matched_product_nums.append(futures[f][0])
+                    matched_product_nums.append(futures[f])
             except Exception as e:
                 trace_info = traceback.format_exc()
                 info = f'Exception for batch_features, e:{e}, prod_num:{prod_name}, trace: {trace_info}'
@@ -337,15 +301,15 @@ def check_products_matched(recent_messages, full_features, task_id: str, model_n
     return matched_product_nums
 
 def to_content_prompt(recent_messages, feature: str) -> list:
-    # 如果用户的需求里涉及到多个产品，不用管，只看给定的这一个产品是否满足。
-    # todo 没有用到 cals 中的 user_preferred 和 lanyu 属性，也没判断产品是否没有动态特征
+    # todo 没用到 user_preferred 和 back_filled 属性，也没判断产品是否没有动态特征
     prompt = f'''
         结构化返回，结果放到 json 对象中，其中有且只有两个字段：content 和 score。
-        根据产品信息，结合用户聊天历史中的需求，
+        根据产品信息，结合顾客与旅游行业客服人员对话内容中的需求，
         给出该产品的推荐理由（输出到 json 对象的 content 字段）和该产品与用户需求的相似度分数（输出到 json 对象的 score 字段，最高 100 分）。
         注意，已知该产品与用户需求比较相符。所以，归纳推荐理由时，请着重给出亮点。
-        即使你认为它不太符合用户需求，也不要直接说它不合适，而是要用"虽然它不完全匹配，但也比较相关"这样的话术。
-        用户的对话历史：{recent_messages}
+        即使你认为它不太符合顾客需求，也不要直接说它不合适，而是要用“虽然它不完全匹配，但也比较相关”这样的话术。
+        如果顾客的需求里对产品数量有要求（类似“给我提供10个候选产品”这样的），不用管，只为给定的这一个产品归纳推荐理由。
+        顾客与客服的对话历史：{recent_messages}
         旅游产品信息：{feature}
     '''
     llm_messages = [{'role': 'user', 'content': prompt}]

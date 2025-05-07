@@ -42,6 +42,9 @@ class ProductSearchTaskResponse(BaseModel):
 class ProductsResponse(BaseModel):
     products: List[object]
 
+FLAG_NONE = 0
+FLAG_USER_PREFERRED = 1
+FLAG_BACK_FILLED = 2
 
 def product_search(request: ProductSearchRequest):
     url = config['coze_api_url']
@@ -142,7 +145,7 @@ def retrieve_products_kb_db_orig(task_id: str, max_num: int, recent_messages, us
 
 def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_input_summary: str, condition):
     env = config['env']
-    rerank_top_k = max_num * 2
+    rerank_top_k = max_num * 4
     retries = 0
     t0 = datetime.now()
     product_nums_bad = set() # 曾经被过滤掉的 product_num 们
@@ -159,37 +162,39 @@ def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_in
         # 去掉曾经被过滤掉的
         product_nums_1 = list(set(product_nums_0) - product_nums_bad)
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_bad: {product_nums_1}')
+        #
+        # todo 去掉状态不对的。等欣福给过滤条件
+        #
         # step 2. 从 kb 取 dynamic features
         dyna_res = coze.get_dynamic_features(product_nums_1, env)
-        log.info(f'________dynamic features:{dyna_res}')
+        # log.info(f'________dynamic features:{dyna_res}')
         t3 = datetime.now()
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} db.get_dynamic_features costs {t3 - t2}')
-        # step 3. filter by dynamic 暂时不用 dynamic filter
-        # product_nums_2 = coze.filter_dynamic(condition, dyna_res)['product_nums']
-        # log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_dynamic: {product_nums_2}')
-        product_nums_2 = product_nums_1
+        # step 3. filter by dynamic
+        product_nums_2 = coze.filter_dynamic(condition, dyna_res)
+        log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_dynamic: {product_nums_2}')
+        # product_nums_2 = product_nums_1
         if len(product_nums_2) > 0:
             # step 4. 从 db 取 product features，用于 content 过滤
             t4 = datetime.now()
             prod_res = coze.get_product_features(product_nums_2, env)
             log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} db.get_product_features costs {datetime.now() - t4}')
-            log.info(f'________product features:{prod_res}')
+            # log.info(f'________product features:{prod_res}')
             # todo 有时 get_product_features() 的返回值里不含某个产品，导致下一句出错
-            prod_diff_tmp = {pn for pn in dyna_res} - {pn for pn in prod_res}
-            log.info(f'________product difffffffff: {prod_diff_tmp}')
+            prod_diff_tmp = set(product_nums_2) - {pn for pn in prod_res}
+            log.info(f'__warning: product in dynamic but not in static: {prod_diff_tmp}')
 
-            # step 5. filter by llm_check_products_matched
+            # step 5. filter by llm.check_products_matched
+            # 新方法：dynamic 为 dict
+            full_features = [
+                (pn, prod_res[pn]['product_feature'])
+                for pn in product_nums_2 if pn in prod_res
+            ]
             # full_features = [
-            #     (pn, prod_res[pn]['product_feature'] + '\n' + dyna_res[pn]['product_feature'], dyna_res[pn]['cals'])
+            #     (pn, prod_res[pn]['product_feature'], dyna_res[pn]['product_feature_dict'])
             #     for pn in product_nums_2 if pn in prod_res and pn in dyna_res
             # ]
-
-            # step 5. 新方法：dynamic 为 dict
-            full_features = [
-                (pn, prod_res[pn]['product_feature'], dyna_res[pn]['product_feature_dict'])
-                for pn in product_nums_2 if pn in prod_res and pn in dyna_res
-            ]
-            log.info(f'________________full_features:{full_features}')
+            # log.info(f'________________full_features:{full_features}')
             t5 = datetime.now()
             model_name = config['model_product_matched']
             product_nums_3 = llm.check_products_matched(recent_messages, full_features, task_id, model_name)
@@ -211,16 +216,15 @@ def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_in
         log.info(f'______prod_nums_3:{product_nums_3}')
         # prod_res_3 = [prod_res[pn] for pn in product_nums_3]
         # dyna_res_3 = [dyna_res[pn] for pn in product_nums_3]
-        return product_nums_3, prod_res, dyna_res
+        return product_nums_3, prod_res, dyna_res, FLAG_NONE
     else:
         # 全军覆没。从最后一轮从 kb 里取出的里面选 2 个。
         product_nums_3 = product_nums_0[:2]
-        dyna_res = coze.get_dynamic_features(product_nums_1, env)
-        for i in dyna_res:
-            i['cals']['back_filled'] = True
-        prod_res = coze.get_product_features(product_nums_2, env)
-        # to do: 可能没有
-        return product_nums_3, prod_res, dyna_res
+        log.info(f'________ looking for backfills: {product_nums_3}')
+        dyna_res = coze.get_dynamic_features(product_nums_3, env)
+        prod_res = coze.get_product_features(product_nums_3, env)
+        # to do: 万一没有，得 back_fill 一下
+        return product_nums_3, prod_res, dyna_res, FLAG_BACK_FILLED
 
 def retrieve_products_db(task_id: str, product_nums: list):
     log.info(f'/get_task_id {task_id} retrieve_product_db product_nums:{product_nums}')
@@ -229,8 +233,6 @@ def retrieve_products_db(task_id: str, product_nums: list):
     env = config['env']
     t0 = datetime.now()
     dyna_res = coze.get_dynamic_features(product_nums, env)
-    for i in dyna_res:
-        i['cals']['user_preferred'] = True
     log.info(f'/get_task_id {task_id} db.get_dynamic_features costs {datetime.now() - t0}')
 
     # 过滤掉不在 db 里（也就是，不在返回的 dyna_res 里）的 product_num
@@ -248,7 +250,7 @@ def retrieve_products_bg(task_id: str, request):
     log.info(f'/get_task_id {task_id} retrieve_products_bg() begins')
     tx = datetime.now()
     recent_messages = request.messages[-11:]
-    condition, user_summary_intention = llm.analyze_user_input(recent_messages, task_id, config['model_user_summary_intention'])
+    condition, user_summary_intention = llm.analyze_user_input(recent_messages, task_id)
     log.info(f'/get_task_id {task_id} condition:{condition}')
     log.info(f'/get_task_id {task_id} user_summary_intention:{user_summary_intention}')
 
@@ -259,33 +261,45 @@ def retrieve_products_bg(task_id: str, request):
         # 用户点名的，即使有不合适的，也不滤掉。不合适的原因应该会出现在 content 里
         # 但若 analyze_user_input 时识别 product_nums 出错，可能出现 product_num 不在 db 里的情况。
         #   这种需要滤掉（在 retrieve_products_db 时滤掉的）。此时只能请用户重新查询了。
-        # todo: 万一全被滤掉，得滥竽一下
+        # todo: 万一全被滤掉，得 backfill 一下
         product_nums_preferred = user_summary_intention['product_nums']
         product_nums, prod_res, dyna_res = retrieve_products_db(task_id, product_nums_preferred)
+        flag = FLAG_USER_PREFERRED
     else: # 1:用户希望推荐更多，或 0:其他
-        product_nums, prod_res, dyna_res = retrieve_products_kb_db(task_id, request.maxNum, recent_messages, user_input_summary, condition)
-
+        product_nums, prod_res, dyna_res, flag = retrieve_products_kb_db(task_id, request.maxNum, recent_messages, user_input_summary, condition)
 
     log.info(f'/get_task_id {task_id} final product nums:{product_nums}')
     if len(product_nums) == 0:
         product_infos = []
     else:
+        # log.info(f"________ prod_res: type:{type(prod_res['U176764'])}, {prod_res['U176764']}")
+        # log.info(f"________ dyna_res: type:{type(dyna_res['U176764'])}, {dyna_res['U176764']}")
         product_infos = [{
             'product_num' : pn,
-            'product_feature' : prod_res[pn]['product_feature'],
-            'dynamic_feature' : dyna_res[pn]['product_feature'],
+            'product_feature' : prod_res[pn]['product_feature'], # str
+            # dynamic_feature 字段的格式为：dict {
+            #     'product_num'          : str,
+            #     'cals'                 : dict for machine,
+            #     'product_feature'      : str,
+            #     'product_feature_dict' : dict for human
+            # }
+            'dynamic_feature' : dyna_res[pn],
             'full_feature' : prod_res[pn]['product_feature'] + '\n' + dyna_res[pn]['product_feature'],
-            'cals' : dyna_res[pn]['cals'],
         } for pn in product_nums]
-        log.info(f'__product_infos: {product_infos}')
+        # log.info(f'__product_infos: {product_infos}')
 
+    flags = {
+        'user_input_summary' : user_input_summary,
+        'user_intention' : user_intention,
+        'flag' : flag,
+    }
     SearchEntityExx.create(
         task_id=task_id,
         max_num=request.maxNum,
         messages=json.dumps(request.messages, ensure_ascii=False, indent=4),
-        user_input_summary=user_input_summary,
+        user_input_summary=json.dumps(flags, ensure_ascii=False, indent=4),
         condition=json.dumps(condition, ensure_ascii=False, indent=4),
-        user_intention=user_intention,
+        user_intention='',
         product_infos=json.dumps(product_infos, ensure_ascii=False, indent=4)
     )
     log.info(f'/get_task_id {task_id} retrieve_products_bg() total costs {datetime.now() - tx}')
@@ -364,21 +378,27 @@ async def get_summary(task_id: str):
     #       意味着计算 summary 要在 content/score 都算出来之后
     #       现在先不管这个
 
-    full_features = "\n\n".join([p['product_feature'] + '\n' + p['dynamic_feature'] for p in product_infos])
+    full_features = '\n\n'.join([p['full_feature'] for p in product_infos])
+    flag = json.loads(search_entity.user_input_summary)['flag']
+    if flag == FLAG_USER_PREFERRED:
+        tip_str = '这些产品是以前推荐过、顾客觉得比较好的。'
+    elif flag == FLAG_BACK_FILLED:
+        tip_str = '这些产品是在没找到合适产品的情况下，用来兜底的。'
+    else:
+        tip_str = ''
+    log.info(f'__get_summary flag:{flag}, tip_str:{tip_str}')
 
-    #
-    # todo 优化这个 prompt
-    # todo 没有用到 cals 中的 user_preferred 和 lanyu 属性，也没判断产品是否没有动态特征
-    #
     prompt = f'''
-根据用户的对话历史，总结出用户的旅行需求。然后根据各产品信息，向用户推荐最合适的若干个产品。
+根据顾客与旅游行业客服人员的对话内容，总结出顾客的旅行需求。然后根据各产品信息，向顾客推荐最合适的若干产品。
 不要超过五百字。回答文字要平实，不要带文学色彩。要简短，不要啰嗦。
 
 ### 限制
 1. productNum 是产品的唯一标识，标题是产品的重要特征。必须包含每个产品的 productNum 和标题。
 2. 只要提及产品，无论之前是否出现过，都要重新给出产品的 productNum。
-3. 但不要出现 "productNum" 这个英文词，要用"编号为某某的产品"这样的方式。
-4. 即使某产品不太符合用户需求，也不要直接说它不合适，而是要用类似"虽然它不完全匹配，但也比较相关"这样的话术。
+3. 但不要出现 "productNum" 这个英文词，要用“编号为某某的产品”这样的方式。
+4. {tip_str}即使某产品不太符合顾客需求，也不要直接说它不合适，而是要用类似“虽然它不完全匹配，但也比较相关”这样的话术。
+5. 如果顾客对推荐数量有要求（类似“给我推荐10个产品”这样的），不用管！一个产品最多推荐一次，不要把一个产品以
+   多个团期的方式推荐多次！即使最后推荐数量达不到顾客的要求也没关系！
 
 ### 产品信息：
 
@@ -467,7 +487,7 @@ async def get_products(task_id: str, timeout_secs: int):
     res_contents = llm.get_product_contents(recent_messages, prod_infos, task_id, model_name)
     log.info(f'/get_products_result {task_id} {model_name} llm.get_contents costs {datetime.now() - t0}')
     log.info(f'/get_products_result {task_id} {model_name} llm.get_contents result {res_contents}')
-    log.info(f'_______________ res_contents from llm {model_name}, before sorting _{res_contents}')
+    # log.info(f'_______________ res_contents from llm {model_name}, before sorting _{res_contents}')
     # res_contents 中每一项有三个字段：content, score, product_num
     products_sorted = sorted(res_contents, key=lambda p: -p['score'])
     log.info(f'/get_products_result {task_id} get_contents costs {datetime.now() - t0}')

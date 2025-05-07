@@ -14,12 +14,12 @@ def my_test(query: str):
     ]
     t00 = datetime.now()
     task_id = 'mock_task_id_1234'
-    model_name = 'qwen-turbo'
-    log.info(f'__condition_messages:{request_messages}')
+    # model_name = 'qwen-turbo'
+    log.info(f'{task_id} condition_messages:{request_messages}')
     res = llm.analyze_user_input(request_messages, task_id)
-    log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
-    # log.info(f'/get_task_id {task_id} {model_name}.condition:{res[0]}')
-    # log.info(f'/get_task_id {task_id} {model_name}.summary_intention:{res[1]}')
+    log.info(f'{task_id} analyze_user_input costs {datetime.now() - t00}')
+    log.info(f'{task_id} condition:{res[0]}')
+    # log.info(f'{task_id} summary_intention:{res[1]}')
 
 if __name__ == '__main__':
     task_id = 'mock_task_id_1234'
