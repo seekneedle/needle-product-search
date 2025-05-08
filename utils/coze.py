@@ -484,9 +484,36 @@ def filter_dynamic(condition: dict, products) -> list:
     return list(product_nums)
 
 
+def test_get_feature(product_nums: list):
+    import time
+    for p in product_nums:
+        url = f'https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={p}'
+        try:
+            data = requests.get(url).json()['data']
+            if data is None:
+                print(f"{p}")
+            else:
+                print(f"{p} {data['productTitle']}")
+                js = json.dumps(data, ensure_ascii=False, indent=4)
+                # with open(f'product_desc_{p}.json', 'w') as f:
+                #     f.write(js)
+        finally:
+            pass
+        time.sleep(0.2)
+
 
 if __name__ == '__main__':
     env = 'uat'
+
+    print(f'will visit Georgia')
+    user_input_summary = '我想去格鲁吉亚旅行，目前没有提到具体推荐的产品编号。s'
+    rerank_top_k = 80
+    r = search_product_kb(user_input_summary, rerank_top_k, env)
+    product_num_list = list(set(r['product_nums']))
+    print(f'{rerank_top_k} -> {len(product_num_list)}')
+    test_get_feature(product_num_list)
+    sys.exit(0)
+
 
     # cals = {'cals': []}
     # condition = {

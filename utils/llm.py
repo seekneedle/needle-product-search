@@ -129,12 +129,12 @@ def to_condition_dates_prompt(recent_messages: list) -> str:
           c.1. 劳动节：5月1日至5日
           c.2. 端午节：5月31日至6月2日
           c.3. 国庆节、中秋节：10月1日至8日。中秋节是10月6日，与国庆假期重合。
-          c.4. 寒假：1月15日到2月15日，暑假：7月1日到8月30日。
+          c.4. 寒假：1月15日到2月15日，暑假：7月1日到8月30日，暑期：7月1日到8月30日。
         d. 2026 年的部分公共假期：
           d.1. 元旦：1月1日
           d.2. 春节：2月16日到23日
           d.3. 清明节：4月4日到6日
-          d.4. 寒假：1月15日到2月15日，暑假：7月1日到8月30日。
+          d.4. 寒假：1月15日到2月15日，暑假：7月1日到8月30日，暑期：7月1日到8月30日。
 
         #几个原则#
         1. 只考虑顾客直接提到的出发、返回日期。不要根据出发日期和旅行时长推算返回日期。
@@ -174,7 +174,8 @@ def to_condition_others_prompt(recent_messages: list) -> str:
 
         #提取顾客的出行人数#
         1. 提取顾客提到的出行人数，放到 tourists 中。
-        2. 若顾客没提到人数，则认为只有一人。
+        2. 若顾客提到“家庭游”、“一家人”、“亲子游”等，则至少有三人。
+        3. 若顾客没提到人数，或无法判断，则认为至少有一人。不能出现 0 人的情况。
 
         #提取顾客希望的出行时长#
         1. 若顾客只提到了一个时长，且无法判断是下限还是上限，则同时设置 days_min 和 days_max 为该值。
@@ -187,8 +188,6 @@ def to_condition_others_prompt(recent_messages: list) -> str:
         3. 否则，提取顾客希望的价格下限、上限，分别放到 price_min 和 price_max 里。
     '''
     return prompt_condition
-
-
 
 def analyze_user_input(recent_messages: list, task_id: str):
     prompt_condition_dates = to_condition_dates_prompt(recent_messages)
@@ -247,6 +246,8 @@ def analyze_user_input(recent_messages: list, task_id: str):
 
     # log.info(f'__condition_dates: {condition_dates}')
     # log.info(f'__condition_parsed: {condition_others}')
+    if condition_others['tourists'] < 1:
+        condition_others['tourists'] = 1 # 以防万一
     return condition_dates | condition_others, user_summary_intention
 
 def to_match_prompt(recent_messages, feature: str) -> list:
