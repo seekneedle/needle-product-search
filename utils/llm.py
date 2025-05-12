@@ -280,7 +280,7 @@ def check_products_matched(recent_messages, full_features, task_id: str, model_n
         futures = {executor.submit(
             qwen_call, to_match_prompt(recent_messages, feature),
             'json_object', task_id, f'{pn} if_matched', model_name
-        ): pn for pn, feature in full_features}
+        ): pn for pn, feature in full_features.items()}
 
         for f in as_completed(futures):
             prod_name = futures[f]

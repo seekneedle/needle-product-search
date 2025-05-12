@@ -3,8 +3,8 @@ sys.path.append(str(pathlib.Path(__file__).parent.parent))  # 将项目根目录
 ############# 以上两行在单独测试本文件时加上
 
 import requests
-from decimal import Decimal, InvalidOperation
-from datetime import datetime, timedelta
+# from decimal import Decimal, InvalidOperation
+from datetime import datetime, timedelta, date
 import traceback
 import json
 import sys
@@ -66,21 +66,12 @@ def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
 
 ####
 
-## helper
-# def not_null(value):
-#     if value is not None and value != "":
-#         return True
-#     return False
-
 def field_valid(d: dict, key: str) -> bool:
     return key in d and d[key] != ''
 
 # 只用在生成 dynamic feature
 def get_field_str(d: dict, key: str) -> str:
     return str(d[key]) if field_valid(d, key) else ''
-
-# def get_field_int(d: dict, key: str, default_val: int):
-#     return d[key] if key in d else default_val
 
 def get_field_or_default(d: dict, key: str, default_val):
     return d[key] if key in d else default_val
@@ -148,74 +139,114 @@ def get_feature_desc(product_detail, intro, parent_key, keys=None) -> str:
         print(f"An error occurred: {e}")
         return f"{intro}："
 
-def get_dynamic_feature(product_num: str, env: str):
-    if env == 'uat':
-        url = f'https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}'
-    else:
-        url = f'https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}'
-    try:
-        product_features = [f'productNum：{product_num}']
-        data = requests.get(url).json()['data']
-        if data is None:
-            return {}
-        lines = data['lineList']
-        # log.info(f'____________raw dynamic lines:{lines}')
-        out_cals = {'cals' : []}
-        out_features = {}
-        for line in lines:
-            trip_days_str = get_field_str(line, 'tripDays') # 原为 int 类型
-            trip_nights_str = get_field_str(line, 'tripNight') # 原为 int 类型
-            out_cals['trip_days'] = trip_days_str
-            # out_cals['trip_nights'] = trip_nights_str
-            cnt = 0
-            for cal in line['calList']:
-                if cal['isOpen'] == 1:
+'''
+1、剩余库存大于0产品（团期：validStock>0）;
+2、未到截团时间的产品（团期：endPreDate>=当日）；
+3、自研产品，只允许本公司销售渠道售卖。不允许其他渠道或C端展示（productMode!=2）；
+4、产品所属供应商是内部供应商时，在供应商系统投放的产品，不允许本公司下的渠道销售；不允许C端小程序销售（supplierInternalFlag!=1）；
+5、售卖状态是启售的产品（openState=1）；
+6、产品管理合同有效的产品（contractStatus=1）；
+7、产品所属供应商有效的产品（supplierStatus=1）；
+8、审核状态是审核通过的产品（auditStatus=2）;
+'''
+
+# def pf_field_valid(pf: dict, key: str):
+#     return key in pf and pf[key] is not None
+#
+# def pf_field_desc(pf: dict, k: str):
+#     return f'  {k}: __{pf[k]}__' if k in pf else f'  {k}: __not_present__'
+
+# 参数
+# my_company_id: 我的分公司id，前端传来
+# pf: 从 db 拿到的 product feature
+def is_product_company_valid(my_company_id: str, pf: dict) -> bool:
+    if my_company_id == '': # 向后兼容，若前端没传来此参数，则不检查 company 是否合法
+        return True
+    #
+    # 这三个字段值有可能为 null
+    #     proxyCompanyId, supplierInternalFlag, supplierCompanyId
+    #
+    if pf['productMode'] == 2: # 自研产品
+        return pf['proxyCompanyId'] == my_company_id
+    # else: 外采产品
+    if pf['supplierInternalFlag'] == 1: # 内部分公司
+        return pf['supplierCompanyId'] != my_company_id
+    else: # 连内部分公司都不是，纯外部
+        return True
+
+def is_product_valid(my_company_id: str, pf: dict) -> bool:
+    return (
+        is_product_company_valid(my_company_id, pf) # 3,4
+        and pf['openState'] == 1  # 要求 5、售卖状态是启售的产品（openState=1）
+        and pf['contractStatus'] == 1   # 6、产品管理合同有效的产品（contractStatus=1）
+        and pf['supplierStatus'] == 1 # 7、产品所属供应商有效的产品（supplierStatus=1
+        and pf['auditStatus'] == 2 # 8、审核状态是审核通过的产品（auditStatus=2）
+    )
+
+
+def cal_to_str(cal_name: str, cal: dict):
+    return cal_name + '：' + '，'.join([k + '：' + v for k, v in cal.items()])
+
+def cals_to_str(product_num: str, cals: dict):
+    return f'productNum：{product_num}\n' + '\n'.join([cal_to_str(k, v) for k, v in cals.items()])
+
+def get_dynamic_feature(product_num: str, data: dict, cond: dict):
+    log.info(f'____dynamic_feature: {product_num}, cond:{cond}')
+    #
+    # tripDays, tripNight 是 line 的属性。（cal 里也有，但值为 null）
+    # validStock, endPreDate 是 cal 的属性
+    #
+    out_cals = {'cals': []}
+    out_features = {}
+    # log.info(f'_____ line count: {len(data["lineList"])}')
+    for line in data['lineList']:
+        if not line_days_valid(product_num, line, cond):
+            continue
+        trip_days_str = get_field_str(line, 'tripDays')  # 原为 int 类型
+        trip_nights_str = get_field_str(line, 'tripNight')  # 原为 int 类型
+        cnt = 0
+        for cal in line['calList']:
+            log.info(f"__cal.isOpen: {cal['isOpen']}")
+            if cal['isOpen'] == 1:
+                if (cal_stock_valid(product_num, cal, cond)
+                        and cal_price_valid(product_num, cal, cond)
+                        and cal_date_valid(product_num, 'depart_date', cal, cond)
+                        and cal_date_valid(product_num, 'back_date', cal, cond)
+                ):
                     out_cal = {
                         'price' : get_field_str(cal, 'adultSalePrice'), # 原为 float 类型
+                        'closing_date' : cal['endPreDate'],
                         'depart_date' : cal['departDate'],
                         'back_date' : cal['calBackDate'],
-                        'stock' : get_field_str(cal, 'stock') # 原为 int 类型
+                        'valid_stock' : get_field_str(cal, 'validStock'), # 原为 int 类型
+                        'trip_days' : trip_days_str,
                     }
                     out_cals['cals'].append(out_cal)
 
-                    product_features.append(get_feature_desc(cal, '成人售价', 'adultSalePrice'))
-                    product_features.append(get_feature_desc(cal, '出发日期', 'departDate'))
-                    product_features.append(get_feature_desc(cal, '返回日期', 'calBackDate'))
-                    # product_features.append(get_feature_desc(cal, '旅行天数', 'tripDays'))
-                    # product_features.append(get_feature_desc(cal, '旅行夜数', 'tripNight'))
-                    product_features.append(get_feature_desc(cal, '存量', 'stock'))
-
                     out_feature = {
-                        '成人售价' : get_field_str(cal, 'adultSalePrice'),
-                        '出发日期' : get_field_str(cal, 'departDate'),
-                        '返回日期' : get_field_str(cal, 'calBackDate'),
-                        '旅行天数' : trip_days_str,
+                        '成人售价': get_field_str(cal, 'adultSalePrice'),
+                        '结团日期': get_field_str(cal, 'endPreDate'),
+                        '出发日期': get_field_str(cal, 'departDate'),
+                        '返回日期': get_field_str(cal, 'calBackDate'),
+                        '旅行天数': trip_days_str,
                         # '旅行夜数' : trip_nights_str,
-                        '存量' : get_field_str(cal, 'stock'),
+                        '存量': get_field_str(cal, 'validStock'),
                     }
                     cnt += 1
-                    out_features[f'线路{cnt}'] = out_feature
-        product_feature_str = '\n'.join(product_features)
-    except Exception:
+                    out_features[f'团{cnt}'] = out_feature
+    if len(out_features) == 0:
         return {}
+    dynamic_feature_str = cals_to_str(product_num, out_features)
+    log.info(f'____dynamic str: ____{dynamic_feature_str}____')
     return {
         'product_num': product_num,
         'cals': out_cals,                       # 机器用，dict
-        'product_feature': product_feature_str, # 人类用，str
-        'product_feature_dict' : out_features   # 人类用，dict
+        'product_feature_dict' : out_features,  # 人类用，dict
+        'product_feature': dynamic_feature_str, # 人类用，str
     }
 
-####
-
-def get_product_feature(product_num: str, env: str):
-    if env == 'prod':
-        url = f"https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}"
-    else:
-        url = f"https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}"
+def get_product_feature(product_num: str, product_detail: dict):
     try:
-        product_detail = requests.get(url).json()['data']
-        if product_detail is None:
-            return {}
         product_features = [f"productNum：{product_num}"]
         product_features.append(get_feature_desc(product_detail, "参团游类型", 'productGroupTypeName'))
         product_features.append(get_feature_desc(product_detail, "产品类别", 'productTypeName'))
@@ -286,65 +317,70 @@ def get_product_feature(product_num: str, env: str):
     except Exception as e:
         print(f"product detail null: {e}")
         product_feature_str = ""
-    return {"product_feature": product_feature_str, "product_num": product_num}
+    return product_feature_str
+    # return {"product_feature": product_feature_str, "product_num": product_num}
 
+
+# 返回 dynamic feature 和 product_feature
+def get_full_feature(product_num: str, my_company_id: str, cond: dict, env: str):
+    log.info(f'_____get_full_feature: {product_num}, my_company_id:{my_company_id}')
+    if env == 'uat':
+        url = f'https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}'
+    else:
+        url = f'https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}'
+    try:
+        data = requests.get(url).json()['data']
+        if data is None:
+            log.info(f'__get_full_feature {product_num} json empty failed')
+            return {}, {}
+        if not is_product_valid(my_company_id, data):
+            log.info(f'__get_full_feature {product_num} product invalid failed')
+            return {}, {}
+
+        df = get_dynamic_feature(product_num, data, cond)
+        # log.info(f'___df:_{df}_')
+        if len(df) == 0:
+            return {}, {}
+        # product_feature_str = get_product_feature_new(product_num, data)
+        pf = get_product_feature(product_num, data)
+        # log.info(f'___pf:_{pf}_')
+        return df, pf
+    except Exception as e:
+        trace_info = traceback.format_exc()
+        log.info(f'__get_full_feature {product_num} exception failed. e:{e}, trace:{trace_info}')
+        return {}, {}
 
 # helper
-def batch_features(product_nums: list, env: str, func) -> dict:
-    products = {}
+def batch_features(product_nums: set, my_company_id: str, cond: dict, env: str, func) -> dict:
+    dynas, prods = {}, {}
+
     #
     # todo 并发数量应该多少？
     #
     with ThreadPoolExecutor(max_workers=10) as executor:
         # map<future, to_add_name_list>
-        futures = {executor.submit(func, pn, env): pn for pn in product_nums}
+        futures = {executor.submit(func, pn, my_company_id, cond, env): pn for pn in product_nums}
 
         for f in as_completed(futures):
+            prod_num = futures[f]
             try:
-                feature = f.result()
-                if feature: # 若不是空 dict
-                    prod_num = futures[f]
-                    products[prod_num] = feature
+                df, pf = f.result()
+                if len(df) != 0: # 若不是空 dict
+                    dynas[prod_num] = df
+                    prods[prod_num] = pf
             except Exception as e:
                 trace_info = traceback.format_exc()
-                info = f'Exception for batch_features, e:{e}, prod_num:{futures[f]}, trace: {trace_info}'
+                info = f'Exception for batch_features {prod_num}, e:{e}, trace: {trace_info}'
                 print(f'__exception: {info}')
-    return products
+    return dynas, prods
 
-def get_dynamic_features(product_nums: list, env: str):
-    # products = { pn : get_dynamic_feature(pn, env) for pn in product_nums }
-    return batch_features(product_nums, env, get_dynamic_feature)
+def get_full_features(product_num_set: set, my_company_id: str, cond: dict, env: str):
+    log.info(f'__get_full_features: product_nums:{product_num_set}, my_company_id:{my_company_id}')
+    return batch_features(product_num_set, my_company_id, cond, env, get_full_feature)
 
-def get_product_features(product_nums: list, env: str):
-    # products = { pn : get_product_feature(pn, env) for pn in product_nums }
-    return batch_features(product_nums, env, get_product_feature)
+
 
 ####
-
-# 将仅包含钱数的字符串转换为保留两位小数的Decimal。
-# 参数: price_str (str): condition 和 feature_cal 中的 price 字符串。
-# 返回: Decimal: 保留两位小数的价格，如果发生异常则返回 0
-def format_price(price_str):
-    if price_str is None or price_str == '':
-        return 0
-    try:
-        # # 尝试将字符串转换为 Decimal 类型
-        # price_decimal = Decimal(price_str)
-        #
-        # # 保留两位小数
-        # formatted_price = price_decimal.quantize(Decimal('0.00'))
-
-        # 将字符串转换为 Decimal 类型，并保留两位小数
-        formatted_price = Decimal(price_str).quantize(Decimal('0.00'))
-        return formatted_price
-    except InvalidOperation:
-        # 如果输入不是有效的数字，则捕获异常并返回 None
-        print(f"Error: '{price_str}' is not a valid number.")
-        return 0
-    except Exception as e:
-        # 捕获其他所有异常
-        print(f"An unexpected error occurred: {e}")
-        return 0
 
 #
 # 0 0: 都未指定，直接返回 true
@@ -371,117 +407,103 @@ def number_matched(cal_val, cond_val_min, cond_val_max, what) -> bool:
             return True
     return False
 
-def days_matched(cals: dict, condition: dict) -> bool:
-    if field_valid(cals, 'trip_days'):
-        days_cal = int(cals['trip_days'])
-        if days_cal is not None and days_cal > 0:
-            cond_days_max = get_field_or_default(condition, 'days_max', 0)
-            cond_days_min = get_field_or_default(condition, 'days_min', 0)
-            if number_matched(days_cal, cond_days_min, cond_days_max, 'days'):
-                return True
-    log.info('__dynamic_filter: days failed.')
+def line_days_valid(product_num: str, line: dict, condition: dict) -> bool:
+    line_key = 'tripDays'
+    if line_key in line and line[line_key] is not None:
+        line_days = line[line_key]
+        log.info(f'____line.days: {line_days}')
+        cond_days_max = get_field_or_default(condition, 'days_max', 0)
+        cond_days_min = get_field_or_default(condition, 'days_min', 0)
+        if number_matched(line_days, cond_days_min, cond_days_max, 'days'):
+            return True
+    log.info(f'__dynamic_filter {product_num} days failed.')
     return False
 
-def price_matched(cal: dict, condition: dict, cond_tourists: int) -> bool:
-    if field_valid(cal, 'price'):
-        cal_price = format_price(cal['price'])
-        if cal_price is not None and cal_price > 0:
-            cal_price *= cond_tourists  # 单价 * 人数
-            cond_price_min = get_field_or_default(condition, 'price_min', 0)
-            cond_price_max = get_field_or_default(condition, 'price_max', 0)
-            if number_matched(cal_price, cond_price_min, cond_price_max, 'price'):
+def cal_stock_valid(product_num: str, cal: dict, condition: dict):
+    # 存量、人数
+    cal_key = 'validStock'
+    cond_key = 'tourists'
+    if cal_key in cal and cal[cal_key] is not None:
+        cal_valid_stock = cal[cal_key]
+        cond_tourists = get_field_or_default(condition, cond_key, 1)
+        if cal_valid_stock >= cond_tourists:
                 return True
-    log.info(f'__dynamic_filter: price failed.')
+    log.info(f'__dynamic_filter: stock/tourists failed.')
     return False
 
-def to_date(date_str: str) -> datetime:
-    return datetime.strptime(date_str, '%Y-%m-%d')
+def cal_price_valid(product_num: str, cal: dict, condition: dict) -> bool:
+    # 共有这些字段
+    #   adultSalePrice, adultRealSalePrice, adultSetPrice
+    #   childSalePrice, childRealSalePrice, childSetPrice
+    #   dfcSalePrice, dfcSetPrice
+    # 含义
+    #   sale price: 建议零售价
+    #   real sale price: 实际零售价
+    #   set price: 结算价
+    #   dfc: 单房差，已废弃
+    # 判断时用 real sale price
 
-def date_matched(cal: dict, condition: dict, what: str) -> bool:
-    # what: 'depart_date' or 'back_date'
-    if not field_valid(cal, what):
-        return True
-    cal_date = to_date(cal[what])
-    # 如果 cal_depart_date 比今天早，返回 False
-    if cal_date < datetime.today():
-        log.info(f'__dynamic_filter: {what} earlier than today failed.')
+    cal_key = 'adultRealSalePrice'
+    if cal_key in cal and cal[cal_key] is not None:
+        cal_price = cal[cal_key]
+        log.info(f'____cal.price: {cal_price}')
+        cal_price *= get_field_or_default(condition, 'tourists', 1) # 单价 * 人数
+        cond_price_min = get_field_or_default(condition, 'price_min', 0)
+        cond_price_max = get_field_or_default(condition, 'price_max', 0)
+        if number_matched(cal_price, cond_price_min, cond_price_max, 'price'):
+            return True
+    log.info(f'__dynamic_filter: {product_num} price failed.')
+    return False
+
+def to_date(date_str: str) -> date:
+    return datetime.strptime(date_str, '%Y-%m-%d').date()
+
+def cal_date_valid(product_num: str, cond_key: str, cal: dict, condition: dict) -> bool:
+    # cond_key: 'depart_date' or 'back_date'
+    cal_key = {'depart_date' : 'departDate', 'back_date' : 'calBackDate'}[cond_key]
+    cal_closing_key = 'endPreDate'
+    if cal_key not in cal or cal_closing_key not in cal:
+        return False
+    cal_date = to_date(cal[cal_key])
+    cal_closing_date = to_date(cal[cal_closing_key])
+    date_today = date.today()
+    log.info(f'__cal {cond_key}: {cal_date}, 结团日期: {cal_closing_date}, today: {date_today}')
+    if cal_date is None or cal_date == '' or cal_closing_date is None or cal_closing_date == '':
         return False
 
-    cond_depart_min_str = get_field_or_default(condition, f'{what}_min', '')
-    cond_depart_max_str = get_field_or_default(condition, f'{what}_max', '')
-    if cond_depart_min_str == '' and cond_depart_max_str == '':
+    # 主要是两个判断条件
+    #   today <= cal.结团日期
+    #   cond.depart_min - 3 <= cal.出发日期 <= cond.depart_max + 3
+
+    # 如果 cal.结团日期 比 today 早，返回 False
+    if cal_closing_date < date_today:
+        log.info(f'__dynamic_filter: {cond_key} cal closed failed.')
+        return False
+
+    cond_min_str = get_field_or_default(condition, f'{cond_key}_min', '')
+    cond_max_str = get_field_or_default(condition, f'{cond_key}_max', '')
+    if cond_min_str == '' and cond_max_str == '':
         return True
-    elif cond_depart_min_str != '' and cond_depart_max_str == '':
-        if to_date(cond_depart_min_str) <= cal_date:
+    elif cond_min_str != '' and cond_max_str == '':
+        if to_date(cond_min_str) <= cal_date:
             return True
-    elif cond_depart_min_str == '' and cond_depart_max_str != '':
-        if cal_date <= to_date(cond_depart_max_str):
+    elif cond_min_str == '' and cond_max_str != '':
+        if cal_date <= to_date(cond_max_str):
             return True
-    elif cond_depart_min_str == cond_depart_max_str:
-        cond_date = to_date(cond_depart_min_str)
+    elif cond_min_str == cond_max_str:
+        cond_date = to_date(cond_min_str)
         if cond_date - timedelta(days=3) <= cal_date <= cond_date + timedelta(days=3):
             return True
-    elif cond_depart_min_str != cond_depart_max_str:
-        if to_date(cond_depart_min_str) <= cal_date <= to_date(cond_depart_max_str):
+    elif cond_min_str != cond_max_str:
+        if to_date(cond_min_str) <= cal_date <= to_date(cond_max_str):
             return True
-    log.info(f'__dynamic_filter: {what} failed.')
+    log.info(f'__dynamic_filter: {cond_key} failed.')
     return False
 
 
-# 检查旅行产品的团期数据是否符合需求条件。
-def cal_matched(cal, condition):
-    # log.info(f'__cal_matched(): type(cal):{type(cal)}, cal:{cal}, condition:{condition}')
-    try:
-        # 存量、人数
-        cond_tourists = get_field_or_default(condition, 'tourists', 1)
-        if field_valid(cal, 'stock'):
-            stock_cal = int(cal['stock'])
-            if stock_cal < cond_tourists:
-                log.info(f'__dynamic_filter: stock/tourists failed.')
-                return False
-
-        if not price_matched(cal, condition, cond_tourists):
-            return False
-        if not date_matched(cal, condition, 'depart_date'):
-            return False
-        if not date_matched(cal, condition, 'back_date'):
-            return False
-        return True
-    except ValueError as e:
-        print(f"Error: {e}")
-        return False
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        info = traceback.format_exc()
-        return False, info
-
-# 检查旅行产品的团期数据是否符合需求条件。
-def cals_matched(cals, condition):
-    if 'cals' not in cals or len(cals['cals']) == 0:
-        log.info(f'__dynamic_filter: cals empty. failed.')
-        # 没有合适的团期了
-        return False
-
-    # 旅行时长
-    if not days_matched(cals, condition):
-        return False
-
-    for cal in cals['cals']:
-        if cal_matched(cal, condition):
-            log.info(f'__dynamic_filter: matched {cal}')
-            return True
-
-    return False
 
 
-def filter_dynamic(condition: dict, products) -> list:
-    product_nums = set()
-    # log.info(f'__________filter dynamic: products:{products}')
-    for pn, product in products.items():
-        # log.info(f'__filter_dynamic(): product.cals:{product["cals"]}')
-        if cals_matched(product['cals'], condition):
-            product_nums.add(product['product_num'])
-    return list(product_nums)
+
 
 
 def test_get_feature(product_nums: list):
@@ -495,91 +517,41 @@ def test_get_feature(product_nums: list):
             else:
                 print(f"{p} {data['productTitle']}")
                 js = json.dumps(data, ensure_ascii=False, indent=4)
-                # with open(f'product_desc_{p}.json', 'w') as f:
-                #     f.write(js)
+                with open(f'georgia_desc_{p}.json', 'w') as f:
+                    f.write(js)
         finally:
             pass
         time.sleep(0.2)
 
-
 if __name__ == '__main__':
     env = 'uat'
+    # product_num_list = ['U178329', 'U173527', 'U176764', 'U175263', 'U178181', 'U170495']
+    product_num_list = {'U167154', 'U178795', 'U195697'}
+    my_company_id = ''
+    condition = {
+        'tourists': 1,
+        'days_min': 5,
+        'days_max': 15,
+        'price_min': 0,
+        'price_max': 30000,
+        'depart_date_min': '2025-05-01',
+        'depart_date_max': '2025-07-30',
+        'back_date_min': '2025-05-01',
+        'back_date_max': '2025-07-30',
+    }
+    dynas, prods = get_full_features(product_num_list, my_company_id, condition, env)
+    print(f'_dynas:{dynas}')
+    print(f'_prods:{prods}')
+    sys.exit(0)
 
     print(f'will visit Georgia')
-    user_input_summary = '我想去格鲁吉亚旅行，目前没有提到具体推荐的产品编号。s'
-    rerank_top_k = 80
-    r = search_product_kb(user_input_summary, rerank_top_k, env)
-    product_num_list = list(set(r['product_nums']))
+    user_input_summary = '格鲁吉亚'
+    rerank_top_k = 100
+    # r = search_product_kb(user_input_summary, rerank_top_k, env)
+    # product_num_list = list(set(r['product_nums']))
+    product_num_list = [
+        'U175582', 'U167152', 'U173345', 'U192427'
+    ]
     print(f'{rerank_top_k} -> {len(product_num_list)}')
     test_get_feature(product_num_list)
     sys.exit(0)
-
-
-    # cals = {'cals': []}
-    # condition = {
-    #     'depart_date_min': '2025-05-01',
-    #     'depart_date_max': '2025-06-30',
-    #     'back_date_min': '2025-05-01',
-    #     'back_date_max': '2025-06-30',
-    #     'tourists': 1,
-    #     'days_min': 5,
-    #     'days_max': 10,
-    #     'price_min': 0,
-    #     'price_max': 30000
-    # }
-
-    cals = {
-        'cals': [
-            {'price': '5999.0', 'depart_date': '2025-05-07', 'back_date': '2025-05-13', 'stock': '2'},
-            {'price': '5999.0', 'depart_date': '2025-05-25', 'back_date': '2025-05-31', 'stock': '1'},
-            {'price': '5999.0', 'depart_date': '2025-05-09', 'back_date': '2025-05-15', 'stock': '2'},
-            {'price': '5999.0', 'depart_date': '2026-05-13', 'back_date': '2026-05-19', 'stock': '4'}
-        ],
-        'trip_days': '7'
-    }
-    condition = {
-        'depart_date_min': '2025-05-01', 'depart_date_max': '2025-06-30',
-        'back_date_min': '2025-05-01', 'back_date_max': '2025-06-30',
-        'tourists': 1,
-        'days_min': 5, 'days_max': 10,
-        'price_min': 0, 'price_max': 30000
-    }
-
-    if_matched = cals_matched(cals, condition)
-    log.info(f'{if_matched}')
-    sys.exit(0)
-
-    # product_nums = ['1', '2', 'U167657']
-    # res = get_dynamic_features(product_nums, env)
-    # log.info(f'\n\nres: {res}')
-    # sys.exit(0)
-
-    # user_input_summary = '想五一期间去澳大利亚和新西兰转转，别太累，别自驾'
-    # rerank_top_k = 5
-    # kb_res = search_product_kb(user_input_summary, rerank_top_k, env)
-    # print(kb_res)
-    # print(json.dumps(kb_res, indent=4))
-    # print('_' * 40)
-    #
-    # product_nums = kb_res['product_nums']
-    product_nums = [
-        "U182795",
-        # "U176847",
-        # "U174845",
-        # "U181428",
-        # "U184243"
-    ]
-    ans = get_dynamic_features(product_nums, env)
-    print(ans)
-    print(json.dumps(ans, indent=4))
-    print('_' * 40)
-
-    ans = get_product_features(product_nums, env)
-    print(ans)
-    print(json.dumps(ans, indent=4))
-    print('_' * 40)
-    sys.exit(0)
-
-    # from filter_dynamic_test_data import condition, products
-    # ans = filter_dynamic(condition, products)
-    # print(ans)

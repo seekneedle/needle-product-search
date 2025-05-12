@@ -21,10 +21,10 @@ from openai import OpenAI
 import threading
 import asyncio
 import aiohttp
-from concurrent.futures import ThreadPoolExecutor
 
 class ProductSearchRequest(BaseModel):
     maxNum: Optional[int] = 5
+    myCompanyId: Optional[str] = ''
     messages: List[object]
     class Config:
         arbitrary_types_allowed = True
@@ -74,80 +74,13 @@ def product_search(request: ProductSearchRequest):
         raise RequestError(response.status_code, f"请求失败: {response.status_code}, 响应内容: {response.text}")
 
 
-'''
-def user_input_summary_condition(task_id: str, request_messages):
+# 正常流程：从 kb 召回，去 db 取 feature 并过滤
+def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, recent_messages, user_input_summary: str, condition: dict):
     env = config['env']
-    wf_id_name = 'coze_product_search_task_wf_id'
-    params = {
-        'env': env,
-        'messages': request_messages
-    }
-    log.info(f'/get_task_id {task_id} wf.analyze_user_input before coze_call_sync')
-    t0 = datetime.now()
-    # 不是 async 函数（因要用在 thread 中），无法 await 其 async 版本，只能用 sync 版本
-    res = coze_workflow_sync(wf_id_name, params)
-    log.info(f'/get_task_id {task_id} wf.analyze_user_input costs {datetime.now() - t0}')
-    return res
-
-def analyze_user_input_complete(task_id: str, request_messages):
-    log.info(f'/get_task_id {task_id} analyze_user_input before launch')
-    t0 = datetime.now()
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(user_input_summary_condition, task_id, request_messages)
-        model_name = 'qwen-turbo'
-        f2 = executor.submit(llm.analyze_user_input, request_messages, task_id, model_name)
-    res = f1.result()
-    res2 = f2.result()
-    log.info(f'/get_task_id {task_id} analyze_user_input costs {datetime.now() - t0}')
-
-    # qwen 调用，与 coze workflow 对比。目前保留 coze 方式。
-    # t00 = datetime.now()
-    # model_name = 'qwen-plus'
-    # user_analysis_qwen = llm.analyze_user_input(request.messages, task_id, model_name)
-    # log.info(f'/get_task_id {task_id} {model_name}.analyze_user_input costs {datetime.now() - t00}')
-    # log.info(f'/get_task_id {task_id} {model_name}.user_input_summary:{user_analysis_qwen[0]}')
-    # log.info(f'/get_task_id {task_id} {model_name}.condition:{user_analysis_qwen[1]}')
-    return (res, res2)
-'''
-
-
-'''
-def retrieve_products_kb_db_orig(task_id: str, max_num: int, recent_messages, user_input_summary: str, condition):
-    env = config['env']
-    rerank_top_k = max_num
+    rerank_top_k = max_num * 8
     retries = 0
     t0 = datetime.now()
-    while retries < 3:
-        t1 = datetime.now()
-        kb_res = coze.search_product_kb(user_input_summary, rerank_top_k, env)
-        t2 = datetime.now()
-        log.info(f'/get_task_id {task_id} kb.retrieve costs {t2 - t1}')
-        # kb_res 是 dict 类型
-        product_nums = kb_res['product_nums']
-        log.info(f'/get_task_id {task_id} kb.retrieve result:{product_nums}')
-        dyna_res = coze.get_dynamic_features(product_nums, env)
-        t3 = datetime.now()
-        log.info(f'/get_task_id {task_id} db.get_dynamic_features costs {t3 - t2}')
-        remaining_product_nums = coze.filter_dynamic(condition, dyna_res)['product_nums']
-        if len(remaining_product_nums) > 0:
-            break
-        rerank_top_k += max_num
-        retries += 1
-    t4 = datetime.now()
-    log.info(f'/get_task_id {task_id} co.retrieve_kb_dynamic_features total costs {t4 - t0}')
-
-    log.info(f'__remaining_product_nums:{remaining_product_nums}')
-    t0 = datetime.now()
-    prod_res = coze.get_product_features(remaining_product_nums, env)
-    log.info(f'/get_task_id {task_id} db.get_product_features costs {datetime.now() - t0}')
-    return remaining_product_nums, prod_res, dyna_res
-'''
-
-def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_input_summary: str, condition):
-    env = config['env']
-    rerank_top_k = max_num * 4
-    retries = 0
-    t0 = datetime.now()
+    dyna_res_0, prod_res_0 = {}, {}
     product_nums_bad = set() # 曾经被过滤掉的 product_num 们
     found = False
     while retries < 3:
@@ -157,47 +90,23 @@ def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_in
         t2 = datetime.now()
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} retrieve_kb costs {t2 - t1}')
         # kb_res 是 dict 类型
-        product_nums_0 = list(set(kb_res['product_nums'])) # 去重，因 kb 返回可能有重复的
+        product_nums_0 = set(kb_res['product_nums']) # 去重，因 kb 返回可能有重复的
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after retrieve_kb: {product_nums_0}')
         # 去掉曾经被过滤掉的
-        product_nums_1 = list(set(product_nums_0) - product_nums_bad)
+        product_nums_1 = product_nums_0 - product_nums_bad
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_bad: {product_nums_1}')
-        #
-        # todo 去掉状态不对的。等欣福给过滤条件
-        #
-        # step 2. 从 kb 取 dynamic features
-        dyna_res = coze.get_dynamic_features(product_nums_1, env)
-        # log.info(f'________dynamic features:{dyna_res}')
-        t3 = datetime.now()
-        log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} db.get_dynamic_features costs {t3 - t2}')
-        # step 3. filter by dynamic
-        product_nums_2 = coze.filter_dynamic(condition, dyna_res)
-        log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_dynamic: {product_nums_2}')
-        # product_nums_2 = product_nums_1
-        if len(product_nums_2) > 0:
-            # step 4. 从 db 取 product features，用于 content 过滤
-            t4 = datetime.now()
-            prod_res = coze.get_product_features(product_nums_2, env)
-            log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} db.get_product_features costs {datetime.now() - t4}')
-            # log.info(f'________product features:{prod_res}')
-            # todo 有时 get_product_features() 的返回值里不含某个产品，导致下一句出错
-            prod_diff_tmp = set(product_nums_2) - {pn for pn in prod_res}
-            log.info(f'__warning: product in dynamic but not in static: {prod_diff_tmp}')
+        # step 2. 从 kb 取 product full features，并滤掉状态不正常的，并做 dynamic filtering
+        dyna_res, prod_res = coze.get_full_features(product_nums_1, my_company_id, condition, env)
+        dyna_res_0.update(dyna_res)
+        prod_res_0.update(prod_res) # 把 dynamic filtering 的幸存者保存起来
 
+        if len(dyna_res) > 0:
+            product_nums_2 = dyna_res.keys()
+            log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_dynamic: {product_nums_2}')
             # step 5. filter by llm.check_products_matched
-            # 新方法：dynamic 为 dict
-            full_features = [
-                (pn, prod_res[pn]['product_feature'])
-                for pn in product_nums_2 if pn in prod_res
-            ]
-            # full_features = [
-            #     (pn, prod_res[pn]['product_feature'], dyna_res[pn]['product_feature_dict'])
-            #     for pn in product_nums_2 if pn in prod_res and pn in dyna_res
-            # ]
-            # log.info(f'________________full_features:{full_features}')
             t5 = datetime.now()
             model_name = config['model_product_matched']
-            product_nums_3 = llm.check_products_matched(recent_messages, full_features, task_id, model_name)
+            product_nums_3 = llm.check_products_matched(recent_messages, prod_res, task_id, model_name)
             log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} {model_name} filter_llm_matched costs {datetime.now() - t5}')
             log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} {model_name} after filter_llm_matched: {product_nums_3}')
 
@@ -206,42 +115,36 @@ def retrieve_products_kb_db(task_id: str, max_num: int, recent_messages, user_in
                 break
 
         # 无人幸存。再试。
-        rerank_top_k += max_num
-        product_nums_bad.update(set(product_nums_1))
+        rerank_top_k += max_num * 8
+        product_nums_bad.update(product_nums_1)
         retries += 1
 
     log.info(f'/get_task_id {task_id} retrieve_products_kb_db total costs {datetime.now() - t0}')
     if found:
-        product_nums_3 = product_nums_3[:max_num]
-        log.info(f'______prod_nums_3:{product_nums_3}')
-        # prod_res_3 = [prod_res[pn] for pn in product_nums_3]
-        # dyna_res_3 = [dyna_res[pn] for pn in product_nums_3]
-        return product_nums_3, prod_res, dyna_res, FLAG_NONE
+        product_nums_3 = list(product_nums_3)[:max_num]
+        log.info(f'____prod_nums_3:{product_nums_3}')
+        dyna_res_3 = {p: dyna_res[p] for p in dyna_res}
+        prod_res_3 = {p: prod_res[p] for p in prod_res}
+        return product_nums_3, prod_res_3, dyna_res_3, FLAG_NONE
     else:
-        # 全军覆没。从最后一轮从 kb 里取出的里面选 2 个。
-        product_nums_3 = product_nums_0[:2]
-        log.info(f'________ looking for backfills: {product_nums_3}')
-        dyna_res = coze.get_dynamic_features(product_nums_3, env)
-        prod_res = coze.get_product_features(product_nums_3, env)
-        # to do: 万一没有，得 back_fill 一下
+        # 全军覆没。从曾经通过 dynamic filtering 但没通过 llm.if_matched 的中选两个
+        # 如果这样也空，就不再努力了，返回空吧
+        product_nums_3 = list(dyna_res_0.keys())[:2]
+        log.info(f'looking for backfills: {product_nums_3}')
+        dyna_res = {p: dyna_res_0[p] for p in dyna_res_0}
+        prod_res = {p: prod_res_0[p] for p in prod_res_0}
         return product_nums_3, prod_res, dyna_res, FLAG_BACK_FILLED
 
+# 从 db 召回用户指定的产品
 def retrieve_products_db(task_id: str, product_nums: list):
     log.info(f'/get_task_id {task_id} retrieve_product_db product_nums:{product_nums}')
     if len(product_nums) == 0:
         return [], []
     env = config['env']
     t0 = datetime.now()
-    dyna_res = coze.get_dynamic_features(product_nums, env)
+    # 调用时 my_company_id 和 condition 都为空，以达到「不过滤」的效果
+    dyna_res, prod_res = coze.get_full_features(set(product_nums), '', {}, env)
     log.info(f'/get_task_id {task_id} db.get_dynamic_features costs {datetime.now() - t0}')
-
-    # 过滤掉不在 db 里（也就是，不在返回的 dyna_res 里）的 product_num
-    product_nums = list(dyna_res.keys())
-    log.info(f'/get_task_id {task_id} retrieve_products_db final_product_nums:{product_nums}')
-
-    t0 = datetime.now()
-    prod_res = coze.get_product_features(product_nums, env)
-    log.info(f'/get_task_id {task_id} db.get_product_features costs {datetime.now() - t0}')
     return product_nums, prod_res, dyna_res
 
 # 在单独的 thread 中运行，发射后不管
@@ -261,32 +164,28 @@ def retrieve_products_bg(task_id: str, request):
         # 用户点名的，即使有不合适的，也不滤掉。不合适的原因应该会出现在 content 里
         # 但若 analyze_user_input 时识别 product_nums 出错，可能出现 product_num 不在 db 里的情况。
         #   这种需要滤掉（在 retrieve_products_db 时滤掉的）。此时只能请用户重新查询了。
-        # todo: 万一全被滤掉，得 backfill 一下
         product_nums_preferred = user_summary_intention['product_nums']
         product_nums, prod_res, dyna_res = retrieve_products_db(task_id, product_nums_preferred)
         flag = FLAG_USER_PREFERRED
     else: # 1:用户希望推荐更多，或 0:其他
-        product_nums, prod_res, dyna_res, flag = retrieve_products_kb_db(task_id, request.maxNum, recent_messages, user_input_summary, condition)
+        product_nums, prod_res, dyna_res, flag = retrieve_products_kb_db(task_id, request.maxNum, request.myCompanyId, recent_messages, user_input_summary, condition)
 
     log.info(f'/get_task_id {task_id} final product nums:{product_nums}')
     if len(product_nums) == 0:
         product_infos = []
     else:
-        # log.info(f"________ prod_res: type:{type(prod_res['U176764'])}, {prod_res['U176764']}")
-        # log.info(f"________ dyna_res: type:{type(dyna_res['U176764'])}, {dyna_res['U176764']}")
         product_infos = [{
             'product_num' : pn,
-            'product_feature' : prod_res[pn]['product_feature'], # str
+            'product_feature' : prod_res[pn],#['product_feature'], # str
             # dynamic_feature 字段的格式为：dict {
             #     'product_num'          : str,
             #     'cals'                 : dict for machine,
-            #     'product_feature'      : str,
+            #     'product_feature'      : str for human
             #     'product_feature_dict' : dict for human
             # }
             'dynamic_feature' : dyna_res[pn],
-            'full_feature' : prod_res[pn]['product_feature'] + '\n' + dyna_res[pn]['product_feature'],
+            'full_feature' : prod_res[pn] + '\n' + dyna_res[pn]['product_feature'],
         } for pn in product_nums]
-        # log.info(f'__product_infos: {product_infos}')
 
     flags = {
         'user_input_summary' : user_input_summary,
@@ -433,25 +332,6 @@ async def get_summary(task_id: str):
     t2 = datetime.now()
     log.info(f'/get_summary_result {task_id} {model_name} all chunks arrived. cost all {t2 - t1}, wait+first+all {t2 - start_time}')
 
-    ##### for now, disables qwen-plus, uses qwen-turbo instead
-    # model_name = 'qwen-plus'
-    # log.info(f'/get_summary_result {task_id} before calling {model_name}')
-    # cnt = 0
-    # t0 = datetime.now()
-    # t1 = t0 # 万一没有第一个 chunk，给 t1 设个初值
-    # buffer = ''
-    # async for item in llm.stream_generate_ex(messages, task_id, 'get_summary', model_name):
-    #     cnt += 1
-    #     if cnt == 1:
-    #         t1 = datetime.now()
-    #         log.info(f'/get_summary_result {task_id} {model_name} first chunk arrived. costs first {t1 - t0}, wait+first {t1 - start_time}')
-    #     # log.info(f'/get_summary_result {task_id} chunk {cnt}')
-    #     # yield item
-    #     buffer += item.strip()[len('data: '):]
-    # t2 = datetime.now()
-    # log.info(f'/get_summary_result {task_id} {model_name} all chunks arrived. cost all {t2 - t1}, wait+first+all {t2 - start_time}')
-    # log.info(f'/get_summary_result {task_id} {model_name} summary: {buffer}')
-
 async def get_products(task_id: str, timeout_secs: int):
     log.info(f'/get_products_result {task_id} get_products() begins')
     start_time = datetime.now()
@@ -505,22 +385,6 @@ if __name__ == '__main__':
         {
             "role": "user",
             "content": "您好，想去新加坡和马来西亚，大概一周时间，父母二人带一个十二岁男孩。有什么推荐吗？"
-        },
-        # {
-        #     "role": "assistant",
-        #     "content": "为你推荐编号为 U174845 的产品，【众信制造：金牌南洋传奇】新加坡+马来西亚北京起止 5 晚 7 天。该产品的线路特色包括双峰塔-国家皇宫-广场-国家艺术馆-CITYWALK 城市单轨车-彩虹阶梯-阿罗街。此外，该产品还包含机票费用、行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、境外旅游人身意外险、行程所含景点（区）门票等。出发地为北京，目的地为亚洲、新加坡。\n\n或者你也可以考虑编号为 U167657 的产品，北京起止【寻味南洋-米其林之旅】新加坡+马来西亚 7 天。该产品有两条线路可供选择，线路 A 是马进新出 CA871，线路 C 是大兴去首都回。产品特色是寻味南洋-米其林之旅，你可以品尝到当地的美食。费用包含机票费用、行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、境外旅游人身意外险、行程所含景点（区）门票等。出发地为北京，目的地为亚洲、马来西亚和亚洲、新加坡。\n\n如果你从河南郑州出发，还可以选择编号为 U179033 的产品，【新加坡乐园 MAX】郑州起止 4 晚 6 天。该产品升级 2 晚国际四星，包含新加坡环球影城+飞禽动物园+日间动物园三大乐园精彩之行。费用包含机票费用、行程所列酒店住宿、当地空调旅游巴士、行程中所列餐食、中文导游服务、境外旅游人身意外险、行程所含景点（区）门票等。出发地为河南郑州，目的地为亚洲、新加坡。"
-        # },
-        # {
-        #     "role": "user",
-        #     "content": "这几个都不错，帮我比较一下它们的特色吧，排个序",
-        #     # "content": "嗯，我们不希望太累，想轻松点。从北京出发。费用不是问题，至少五万起。要快，本周末之前必须出发。"
-        # }
-    ]
-
-    msg = [
-        {
-            "role": "user",
-            "content": "想五一期间去澳大利亚和新西兰转转，别太累，别自驾"
         },
     ]
     retrieve_products_bg(task_id, ProductSearchRequest(messages=msg))
