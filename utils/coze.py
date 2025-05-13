@@ -150,11 +150,16 @@ def get_feature_desc(product_detail, intro, parent_key, keys=None) -> str:
 8、审核状态是审核通过的产品（auditStatus=2）;
 '''
 
-# def pf_field_valid(pf: dict, key: str):
-#     return key in pf and pf[key] is not None
-#
-# def pf_field_desc(pf: dict, k: str):
-#     return f'  {k}: __{pf[k]}__' if k in pf else f'  {k}: __not_present__'
+# 以下两个函数仅用于 log 目的
+def pf_field_desc(pf: dict, k: str):
+    return f'{k}:{pf[k]}' if k in pf else f'{k}:_not_present_'
+
+def product_company_to_str(pf: dict):
+    return ', '.join([pf_field_desc(pf, k) for k in [
+        'productMode', 'proxyCompanyId', 'supplierInternalFlag', 'supplierCompanyId',
+        'openState', 'contractStatus', 'supplierStatus', 'auditStatus',
+    ]])
+# 以上两个函数仅用于 log 目的
 
 # 参数
 # my_company_id: 我的分公司id，前端传来
@@ -164,17 +169,22 @@ def is_product_company_valid(my_company_id: str, pf: dict) -> bool:
         return True
     #
     # 这三个字段值有可能为 null
-    #     proxyCompanyId, supplierInternalFlag, supplierCompanyId
+    #     proxyCompanyId（就是 companyId）, supplierInternalFlag, supplierCompanyId
     #
-    if pf['productMode'] == 2: # 自研产品
+    # case 1: productMode:2, proxyCompanyId:32, supplierInternalFlag:None, supplierCompanyId:None
+    # case 2: productMode:1, proxyCompanyId:37, supplierInternalFlag:1, supplierCompanyId:37
+    # case 3: productMode:1, proxyCompanyId:37, supplierInternalFlag:0, supplierCompanyId:None
+
+    if pf['productMode'] == 2: # case 1: 自研产品
         return pf['proxyCompanyId'] == my_company_id
     # else: 外采产品
-    if pf['supplierInternalFlag'] == 1: # 内部分公司
+    if pf['supplierInternalFlag'] == 1: # case 2: 内部分公司
         return pf['supplierCompanyId'] != my_company_id
-    else: # 连内部分公司都不是，纯外部
+    else: # case 3: 连内部分公司都不是，纯外部
         return True
 
 def is_product_valid(my_company_id: str, pf: dict) -> bool:
+    # log.info(f'__is_product_valid: {product_company_to_str(pf)}')
     return (
         is_product_company_valid(my_company_id, pf) # 3,4
         and pf['openState'] == 1  # 要求 5、售卖状态是启售的产品（openState=1）
@@ -191,7 +201,7 @@ def cals_to_str(product_num: str, cals: dict):
     return f'productNum：{product_num}\n' + '\n'.join([cal_to_str(k, v) for k, v in cals.items()])
 
 def get_dynamic_feature(product_num: str, data: dict, cond: dict):
-    log.info(f'____dynamic_feature: {product_num}, cond:{cond}')
+    # log.info(f'__dynamic_feature: {product_num}, cond:{cond}')
     #
     # tripDays, tripNight 是 line 的属性。（cal 里也有，但值为 null）
     # validStock, endPreDate 是 cal 的属性
@@ -206,7 +216,7 @@ def get_dynamic_feature(product_num: str, data: dict, cond: dict):
         trip_nights_str = get_field_str(line, 'tripNight')  # 原为 int 类型
         cnt = 0
         for cal in line['calList']:
-            log.info(f"__cal.isOpen: {cal['isOpen']}")
+            # log.info(f"__cal.isOpen: {cal['isOpen']}")
             if cal['isOpen'] == 1:
                 if (cal_stock_valid(product_num, cal, cond)
                         and cal_price_valid(product_num, cal, cond)
@@ -237,7 +247,7 @@ def get_dynamic_feature(product_num: str, data: dict, cond: dict):
     if len(out_features) == 0:
         return {}
     dynamic_feature_str = cals_to_str(product_num, out_features)
-    log.info(f'____dynamic str: ____{dynamic_feature_str}____')
+    log.info(f'__dynamic str: ____{dynamic_feature_str}____')
     return {
         'product_num': product_num,
         'cals': out_cals,                       # 机器用，dict
@@ -323,7 +333,7 @@ def get_product_feature(product_num: str, product_detail: dict):
 
 # 返回 dynamic feature 和 product_feature
 def get_full_feature(product_num: str, my_company_id: str, cond: dict, env: str):
-    log.info(f'_____get_full_feature: {product_num}, my_company_id:{my_company_id}')
+    # log.info(f'__get_full_feature: {product_num}, my_company_id:{my_company_id}')
     if env == 'uat':
         url = f'https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}'
     else:
@@ -371,11 +381,11 @@ def batch_features(product_nums: set, my_company_id: str, cond: dict, env: str, 
             except Exception as e:
                 trace_info = traceback.format_exc()
                 info = f'Exception for batch_features {prod_num}, e:{e}, trace: {trace_info}'
-                print(f'__exception: {info}')
+                log.info(f'__exception: {info}')
     return dynas, prods
 
 def get_full_features(product_num_set: set, my_company_id: str, cond: dict, env: str):
-    log.info(f'__get_full_features: product_nums:{product_num_set}, my_company_id:{my_company_id}')
+    log.info(f'__get_full_features: product_nums:{product_num_set}, my_company_id:{my_company_id}, condition:{cond}')
     return batch_features(product_num_set, my_company_id, cond, env, get_full_feature)
 
 
@@ -411,12 +421,12 @@ def line_days_valid(product_num: str, line: dict, condition: dict) -> bool:
     line_key = 'tripDays'
     if line_key in line and line[line_key] is not None:
         line_days = line[line_key]
-        log.info(f'____line.days: {line_days}')
+        # log.info(f'__line.days: {line_days}')
         cond_days_max = get_field_or_default(condition, 'days_max', 0)
         cond_days_min = get_field_or_default(condition, 'days_min', 0)
         if number_matched(line_days, cond_days_min, cond_days_max, 'days'):
             return True
-    log.info(f'__dynamic_filter {product_num} days failed.')
+    # log.info(f'__dynamic_filter {product_num} days failed.')
     return False
 
 def cal_stock_valid(product_num: str, cal: dict, condition: dict):
@@ -428,7 +438,7 @@ def cal_stock_valid(product_num: str, cal: dict, condition: dict):
         cond_tourists = get_field_or_default(condition, cond_key, 1)
         if cal_valid_stock >= cond_tourists:
                 return True
-    log.info(f'__dynamic_filter: stock/tourists failed.')
+    # log.info(f'__dynamic_filter: stock/tourists failed.')
     return False
 
 def cal_price_valid(product_num: str, cal: dict, condition: dict) -> bool:
@@ -446,13 +456,13 @@ def cal_price_valid(product_num: str, cal: dict, condition: dict) -> bool:
     cal_key = 'adultRealSalePrice'
     if cal_key in cal and cal[cal_key] is not None:
         cal_price = cal[cal_key]
-        log.info(f'____cal.price: {cal_price}')
+        # log.info(f'__cal.price: {cal_price}')
         cal_price *= get_field_or_default(condition, 'tourists', 1) # 单价 * 人数
         cond_price_min = get_field_or_default(condition, 'price_min', 0)
         cond_price_max = get_field_or_default(condition, 'price_max', 0)
         if number_matched(cal_price, cond_price_min, cond_price_max, 'price'):
             return True
-    log.info(f'__dynamic_filter: {product_num} price failed.')
+    # log.info(f'__dynamic_filter: {product_num} price failed.')
     return False
 
 def to_date(date_str: str) -> date:
@@ -467,17 +477,17 @@ def cal_date_valid(product_num: str, cond_key: str, cal: dict, condition: dict) 
     cal_date = to_date(cal[cal_key])
     cal_closing_date = to_date(cal[cal_closing_key])
     date_today = date.today()
-    log.info(f'__cal {cond_key}: {cal_date}, 结团日期: {cal_closing_date}, today: {date_today}')
+    # log.info(f'__cal {cond_key}: {cal_date}, 结团日期: {cal_closing_date}, today: {date_today}')
     if cal_date is None or cal_date == '' or cal_closing_date is None or cal_closing_date == '':
         return False
 
-    # 主要是两个判断条件
-    #   today <= cal.结团日期
-    #   cond.depart_min - 3 <= cal.出发日期 <= cond.depart_max + 3
+    # 主要应满足两个判断条件
+    #   today <= cal.结团日期 < cal.出发日期 < cal.返回日期
+    #   cond.depart_min - 3 <= cal.出发日期 <= cond.depart_max + 3 (返回日期类似）
 
     # 如果 cal.结团日期 比 today 早，返回 False
-    if cal_closing_date < date_today:
-        log.info(f'__dynamic_filter: {cond_key} cal closed failed.')
+    if date_today > cal_closing_date or date_today >= cal_date:
+        # log.info(f'__dynamic_filter: {cond_key} cal closing_date/{cond_key} in the past. failed.')
         return False
 
     cond_min_str = get_field_or_default(condition, f'{cond_key}_min', '')
@@ -497,7 +507,7 @@ def cal_date_valid(product_num: str, cond_key: str, cal: dict, condition: dict) 
     elif cond_min_str != cond_max_str:
         if to_date(cond_min_str) <= cal_date <= to_date(cond_max_str):
             return True
-    log.info(f'__dynamic_filter: {cond_key} failed.')
+    # log.info(f'__dynamic_filter: {cond_key} failed.')
     return False
 
 
