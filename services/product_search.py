@@ -24,7 +24,7 @@ import aiohttp
 
 class ProductSearchRequest(BaseModel):
     maxNum: Optional[int] = 5
-    myCompanyId: Optional[str] = ''
+    companyId: Optional[str] = ''
     messages: List[object]
     class Config:
         arbitrary_types_allowed = True
@@ -168,7 +168,7 @@ def retrieve_products_bg(task_id: str, request):
         product_nums, prod_res, dyna_res = retrieve_products_db(task_id, product_nums_preferred)
         flag = FLAG_USER_PREFERRED
     else: # 1:用户希望推荐更多，或 0:其他
-        product_nums, prod_res, dyna_res, flag = retrieve_products_kb_db(task_id, request.maxNum, request.myCompanyId, recent_messages, user_input_summary, condition)
+        product_nums, prod_res, dyna_res, flag = retrieve_products_kb_db(task_id, request.maxNum, request.companyId, recent_messages, user_input_summary, condition)
 
     log.info(f'/get_task_id {task_id} final product nums:{product_nums}')
     if len(product_nums) == 0:
