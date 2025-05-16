@@ -11,6 +11,7 @@ from utils.security import decrypt
 from utils.log import log
 from utils import coze, coze_wf, vector_store_api
 from server.response import RequestError
+import requests
 
 class ProductUpdateIncrRequest(BaseModel):
     # type: str
@@ -123,9 +124,32 @@ def product_increment_update(request: ProductUpdateIncrRequest):
     # if update_type == 'del':
     #     return ProductUpdateIncrResponse(results=final_names)
 
+    uux_url = config['uux_url']
+    valid_products = []
+
+    for product_num in final_names:
+        url = f'https://{uux_url}/mcsp/productAi/productInfo?productNum={product_num}'
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            pf = response.json()['data']
+
+            if (pf['openState'] == 1 and
+                    pf['contractStatus'] == 1 and
+                    pf['supplierStatus'] == 1 and
+                    pf['auditStatus'] == 2):
+                valid_products.append(product_num)
+        except (requests.RequestException, KeyError) as e:
+            log.error(f"Error processing product {product_num}: {e}")
+            continue
+
+    final_names = valid_products
+
     # 要 add 的：彻底删干净的 name，和本来就不存在的 name
     if len(final_names) == 0:
         return ProductUpdateIncrResponse(results=[])
+
+    log.info(f'/incr_update after delete final_names: {final_names}')
 
     bsize = 10
     batches = [final_names[i:i + bsize] for i in range(0, len(final_names), bsize)]
