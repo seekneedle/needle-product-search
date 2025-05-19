@@ -399,11 +399,11 @@ async def get_summary(task_id: str):
     t2 = datetime.now()
     log.info(f'/get_summary_result {task_id} {model_name} all chunks arrived. cost all {t2 - t1}, wait+first+all {t2 - start_time}')
 
-async def get_products(task_id: str, timeout_secs: int):
+async def get_products(task_id: str):
     log.info(f'/get_products_result {task_id} get_products() begins')
     start_time = datetime.now()
-    timeout = timedelta(seconds=timeout_secs)
-    poll_interval = 0.2 # seconds
+    timeout = timedelta(seconds=120)
+    poll_interval = 0.5 # seconds
 
     data_ready = False
     while datetime.now() - start_time < timeout:

@@ -139,7 +139,7 @@ async def get_products_result(
 ):
     log.info(f'/get_products_result {task_id} api request received')
     t0 = datetime.now()
-    resp = await get_products(task_id, retry_delay * max_retries)
+    resp = await get_products(task_id)
     log.info(f'/get_products_result {task_id} api request costs {datetime.now() - t0}')
     log.info(f'/get_products_result {task_id} products: {resp}')
     if resp:
