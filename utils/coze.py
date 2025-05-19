@@ -3,66 +3,82 @@ sys.path.append(str(pathlib.Path(__file__).parent.parent))  # 将项目根目录
 ############# 以上两行在单独测试本文件时加上
 
 import requests
-# from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta, date
 import traceback
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from utils.log import log
 
-#
-# search_product_kb
-# get_dynamic_feature
-# get_product_feature
-# get_dynamic_features
-# get_product_features
-# filter_dynamic
-#
+from utils.log import log
 
 def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
     env = 'uat' # 暂时 hard code
     if env == 'prod':
-        url = "http://8.152.213.191:8471/vector_store/retrieve"
-        id = "icmp3tfyk6"
+        url = 'http://8.152.213.191:8471/vector_store/retrieve'
+        id = 'icmp3tfyk6'
     else:
-        url = "http://8.152.213.191:8475/vector_store/retrieve"
-        id = "icmp3tfyk6"
-    auth = "Basic bmVlZGxlOm5lZWRsZQ=="
+        url = 'http://8.152.213.191:8475/vector_store/retrieve'
+        id = 'icmp3tfyk6'
+    auth = 'Basic bmVlZGxlOm5lZWRsZQ=='
 
     headers = {
         'Content-Type': 'application/json',
         'Authorization': auth
     }
     data = {
-        "id": id,
-        "query": user_input_summary,
-        "min_score": 0
+        'id': id,
+        'query': user_input_summary,
+        'min_score': 0,
+        'rerank_top_k' : rerank_top_k,
+        'top_k': rerank_top_k * 2,
+        'sparse_top_k': rerank_top_k * 2
     }
-    data["rerank_top_k"] = rerank_top_k
-    data["top_k"] = rerank_top_k * 2
-    data["sparse_top_k"] = rerank_top_k * 2
     response = requests.post(url, headers=headers, json=data)
-    product_nums = []
-    products = []
-
+    product_num_set = set()
     try:
         for chunk in response.json()['data']['chunks']:
-            metadata = chunk['metadata']
-            product_nums.append(metadata['doc_name'])
-            products.append({"product_feature": chunk['text'], "product_num": metadata['doc_name']})
-        # return {"product_nums": product_nums, "products": products}
+            product_num_set.add(chunk['metadata']['doc_name'])
+            # feature 在 chunk['text'] 里，但我们不关心
+    except Exception as e:
+        info = f'Exception for search_product_kb(), e:{e}, trace:{traceback.format_exc()}'
+        log.info(f'__exception: {info}')
+    return product_num_set
+
+def product_nums_by_codes(level: str, codes: list, my_company_id: str) -> set:
+    if len(codes) == 0:
+        return set()
+    codes_str = ','.join(codes)
+    page_size = 100
+    url = f'https://mapi.uuxlink.com/mcsp/productAi/page?{level}={codes_str}&companyId={my_company_id}&saleTerminal=1&size={page_size}&current=1'
+    log.info(f'__by_addr url: {url}')
+    try:
+        records = requests.get(url).json()['data']['records']
+        # 返回的产品都是合法的，不用过滤
+        return set(r['productNum'] for r in records)
     except Exception as e:
         trace_info = traceback.format_exc()
-        info = f'Exception for search_product_kb(), e:{e}, trace: {trace_info}'
-        log.info(f'__exception: {info}')
-    return {"product_nums": product_nums, "products": products}
+        log.info(f'__get_features_by_codes {level} exception failed. e:{e}, trace:{trace_info}')
+        return set()
 
-    # for chunk in response.json()['data']['chunks']:
-    #     metadata = chunk['metadata']
-    #     product_nums.append(metadata['doc_name'])
-    #     products.append({"product_feature": chunk['text'], "product_num": metadata['doc_name']})
-    # return {"product_nums": product_nums, "products": products}
+def product_nums_by_addresses(addr_codes_list: list, my_company_id: str):
+    log.info(f'by addresses: {addr_codes_list}, my_company:{my_company_id}')
+    if len(addr_codes_list) == 0:
+        return {}, {}
+    levels = {
+        'passCityCodes' : addr_codes_list[2],
+        'destProvinceCodes' : addr_codes_list[1],
+        'destCountryCodes' : addr_codes_list[0],
+    } # 先从小地方开始。否则可能覆盖不了小地方。
+    product_nums = set()
+    for level, codes in levels.items():
+        if len(codes) != 0:
+            res = product_nums_by_codes(level, codes, my_company_id)
+            # log.info(f'__{level}:{codes}: {res}')
+            if len(res) != 0:
+                product_nums.update(res)
+    # log.info(f'__nums:{product_nums}')
+    return product_nums
+
 
 ####
 
@@ -247,7 +263,7 @@ def get_dynamic_feature(product_num: str, data: dict, cond: dict):
     if len(out_features) == 0:
         return {}
     dynamic_feature_str = cals_to_str(product_num, out_features)
-    log.info(f'__dynamic str: ____{dynamic_feature_str}____')
+    # log.info(f'__dynamic str: ____{dynamic_feature_str}____')
     return {
         'product_num': product_num,
         'cals': out_cals,                       # 机器用，dict

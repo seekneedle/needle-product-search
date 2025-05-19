@@ -3,24 +3,25 @@ sys.path.append(str(pathlib.Path(__file__).parent.parent))  # 将项目根目录
 ############# 以上两行在单独测试本文件时加上
 
 import uuid
-from pydantic import BaseModel
 import requests
-from typing import List
-from typing import Optional
 import json
+import threading
+import aiohttp
+import asyncio
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+
+from openai import OpenAI
+from pydantic import BaseModel
+from typing import List, Optional
+
 from data.search import SearchEntityExx
+from server.response import RequestError
 from utils.config import config
 from utils.log import log
 from utils.security import decrypt
-from server.response import RequestError
-from datetime import datetime, timedelta
 from utils.retrieve import retrieve
-from utils import coze
-from utils import llm
-from openai import OpenAI
-import threading
-import asyncio
-import aiohttp
+from utils import coze, llm
 
 class ProductSearchRequest(BaseModel):
     maxNum: Optional[int] = 5
@@ -74,8 +75,40 @@ def product_search(request: ProductSearchRequest):
         raise RequestError(response.status_code, f"请求失败: {response.status_code}, 响应内容: {response.text}")
 
 
+
+# 按地址精确检索：从 page/es 召回，去 db 取 feature 并过滤
+def retrieve_products_by_addr(task_id: str, max_num: int, my_company_id: str, recent_messages, condition: dict, codes_list: list):
+    if len(codes_list) == 0:
+        return [], {}, {}, FLAG_NONE
+
+    t0 = datetime.now()
+    pn_result_set = set()
+    # step 1. 从 page 召回 products，只用其 product_nums 列表
+    product_num_set = coze.product_nums_by_addresses(codes_list, my_company_id)
+    # step 2. 从 kb 取 product full features，并滤掉状态不正常的，并做 dynamic filtering
+    dyna_res, prod_res = coze.get_full_features(product_num_set, my_company_id, condition, 'uat')
+    pn_filtered_list = list(dyna_res.keys())
+    total_len = len(pn_filtered_list)
+    log.info(f'__product count:{total_len}')
+
+    interval = 5
+    model_name = config['model_product_matched']
+    for i in range(0, total_len, interval):
+        prods = {p : prod_res[p] for p in pn_filtered_list[i:i + interval]}
+        pn_matched_list = llm.check_products_matched(recent_messages, prods, task_id, model_name)
+        pn_result_set.update(pn_matched_list)
+        if len(pn_result_set) > 2:
+            break
+
+    pn_result_list = list(pn_result_set)[:max_num] if len(pn_result_set) > 0 else pn_filtered_list[:2]
+    flag = FLAG_NONE if len(pn_result_set) > 0 else FLAG_BACK_FILLED
+    prod_result = {p: prod_res[p] for p in pn_result_list}
+    dyna_result = {p: dyna_res[p] for p in pn_result_list}
+    log.info(f'/get_task_id {task_id} retrieve_products_by_addr costs {datetime.now() - t0}')
+    return pn_result_list, prod_result, dyna_result, flag
+
 # 正常流程：从 kb 召回，去 db 取 feature 并过滤
-def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, recent_messages, user_input_summary: str, condition: dict):
+def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, recent_messages, condition: dict, user_input_summary: str):
     env = config['env']
     rerank_top_k = max_num * 8
     retries = 0
@@ -86,11 +119,9 @@ def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, rece
     while retries < 3:
         t1 = datetime.now()
         # step 1. 从 kb 召回 products，只用其 product_nums 列表
-        kb_res = coze.search_product_kb(user_input_summary, rerank_top_k, env)
+        product_nums_0 = coze.search_product_kb(user_input_summary, rerank_top_k, env)
         t2 = datetime.now()
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} retrieve_kb costs {t2 - t1}')
-        # kb_res 是 dict 类型
-        product_nums_0 = set(kb_res['product_nums']) # 去重，因 kb 返回可能有重复的
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after retrieve_kb: {product_nums_0}')
         # 去掉曾经被过滤掉的
         product_nums_1 = product_nums_0 - product_nums_bad
@@ -122,7 +153,7 @@ def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, rece
     log.info(f'/get_task_id {task_id} retrieve_products_kb_db total costs {datetime.now() - t0}')
     if found:
         product_nums_3 = list(product_nums_3)[:max_num]
-        log.info(f'____prod_nums_3:{product_nums_3}')
+        log.info(f'retrieve_by_kb_db final:{product_nums_3}')
         dyna_res_3 = {p: dyna_res[p] for p in dyna_res}
         prod_res_3 = {p: prod_res[p] for p in prod_res}
         return product_nums_3, prod_res_3, dyna_res_3, FLAG_NONE
@@ -130,7 +161,7 @@ def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, rece
         # 全军覆没。从曾经通过 dynamic filtering 但没通过 llm.if_matched 的中选两个
         # 如果这样也空，就不再努力了，返回空吧
         product_nums_3 = list(dyna_res_0.keys())[:2]
-        log.info(f'looking for backfills: {product_nums_3}')
+        log.info(f'retrieve_by_kb_db back_fills:{product_nums_3}')
         dyna_res = {p: dyna_res_0[p] for p in dyna_res_0}
         prod_res = {p: prod_res_0[p] for p in prod_res_0}
         return product_nums_3, prod_res, dyna_res, FLAG_BACK_FILLED
@@ -168,7 +199,43 @@ def retrieve_products_bg(task_id: str, request):
         product_nums, prod_res, dyna_res = retrieve_products_db(task_id, product_nums_preferred)
         flag = FLAG_USER_PREFERRED
     else: # 1:用户希望推荐更多，或 0:其他
-        product_nums, prod_res, dyna_res, flag = retrieve_products_kb_db(task_id, request.maxNum, request.companyId, recent_messages, user_input_summary, condition)
+        codes_key = 'addr_codes_list'
+        if codes_key not in user_summary_intention:
+            log.info(f'__ by llm only __')
+            product_nums, prod_res, dyna_res, flag = retrieve_products_kb_db(task_id, request.maxNum, request.companyId, recent_messages, condition, user_input_summary)
+            log.info(f'__llm only: {product_nums}')
+        else:
+            log.info('__ by llm and by addr __')
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                f1 = executor.submit(retrieve_products_kb_db, task_id, request.maxNum,
+                                     request.companyId, recent_messages, condition,
+                                     user_input_summary)
+                f2 = executor.submit(retrieve_products_by_addr, task_id, request.maxNum,
+                                     request.companyId, recent_messages, condition,
+                                     user_summary_intention[codes_key])
+            pn1, pf1, df1, flag1 = f1.result()
+            pn2, pf2, df2, flag2 = f2.result()
+            if flag1 == FLAG_NONE and flag2 == FLAG_NONE:
+                # 1, 2 都正常：两者合并，1 在前，然后取最多 max_num 个。
+                # 其实最好是打分、排序后再取 max_num 个。但改动太大。
+                log.info(f'__ by llm:{pn1} normal, by addr:{pn2} normal. merged.')
+                product_nums = (pn1 + pn2)[:request.maxNum]
+                prod_res = {p : (pf1 | pf2)[p] for p in product_nums}
+                dyna_res = {p : (df1 | df2)[p] for p in product_nums}
+                flag = FLAG_NONE
+            elif flag1 == FLAG_BACK_FILLED and flag2 == FLAG_BACK_FILLED:
+                # 1, 2 都是兜底。合并，但 2 的优先级高。直觉 by_addr 的结果可能更好
+                log.info(f'__ by llm:{pn1} back_filled, by addr:{pn2} back_filled. merged.')
+                product_nums = (pn2 + pn1)[:3]
+                prod_res = {p : (pf1 | pf2)[p] for p in product_nums}
+                dyna_res = {p : (df1 | df2)[p] for p in product_nums}
+                flag = FLAG_BACK_FILLED
+            elif flag1 == FLAG_NONE: # 1 正常，2 兜底：保留 1
+                log.info(f'__ by llm:{pn1} normal, by addr:{pn2} back_filled. by_llm kept.')
+                product_nums, prod_res, dyna_res, flag = pn1, pf1, df1, flag1
+            else: # flag2 == FLAG_NONE: 1 兜底，2 正常：保留 2
+                log.info(f'__ by llm:{pn1} back_filled, by addr:{pn2} normal. by_addr kept.')
+                product_nums, prod_res, dyna_res, flag = pn2, pf2, df2, flag2
 
     log.info(f'/get_task_id {task_id} final product nums:{product_nums}')
     if len(product_nums) == 0:

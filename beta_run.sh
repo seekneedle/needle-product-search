@@ -1,1 +1,1 @@
-ENV=ng nohup python main.py >output/run.log 2>&1 &
+ENV=beta nohup python main.py >output/run.log 2>&1 &

@@ -38,7 +38,7 @@ coze_product_questions_wf_id: "7479732260448632867"
 
 model_summary: 'qwen-turbo'
 model_content: 'qwen-turbo'
-model_user_condition: 'qwen-turbo'
+model_user_addresses: 'qwen-plus'
 model_user_condition_dates: 'qwen-plus'
 model_user_condition_others: 'qwen-plus'
 model_user_summary_intention: 'qwen-plus'
@@ -51,4 +51,4 @@ needle_url: http://8.152.213.191:8475
 
 filestore_root_dir: output
 
-db_url: sqlite:///res/ng/example.db
+db_url: sqlite:///res/beta/example.db

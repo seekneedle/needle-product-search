@@ -2,16 +2,19 @@ import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).parent.parent)) # 将项目根目录添加到 Python 路径
 ############# 以上两行在单独测试本文件时加上
 
-from openai import OpenAI, APIError
-from utils.security import decrypt
-from utils.config import config
-from utils.log import log
 import multiprocessing
 import asyncio
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import traceback
+
+from openai import OpenAI, APIError
+
+from utils.security import decrypt
+from utils.config import config
+from utils.log import log
+from utils import geo
 
 client = OpenAI(
         api_key=decrypt(config['api_key']),
@@ -188,10 +191,26 @@ def to_condition_others_prompt(recent_messages: list) -> str:
     '''
     return prompt_condition
 
-def analyze_user_input(recent_messages: list, task_id: str):
-    prompt_condition_dates = to_condition_dates_prompt(recent_messages)
-    prompt_condition_others = to_condition_others_prompt(recent_messages)
+def to_addresses_prompt(recent_messages: list) -> str:
+    prompt_addresses = f'''
+        #背景和需求#
+        从顾客与旅游行业客服人员的对话中，提取出顾客想去旅游的各地名，
+        包括：国家、省、城市、州、郡、县、道等。
+        不允许编造内容。只提取顾客提到的地名。不要根据顾客的想法去找合适的地名。
 
+        以下为这段对话，其中 user 为顾客，assistant 为客服人员。
+
+        ======
+        {recent_messages}
+        ======
+
+        #输出格式#
+        提取结果放到 json 对象中，结构化返回。该 json 对象只有一个字段：
+        - addresses: 字符串数组类型，它的每个元素都是提取出来的一个地名
+    '''
+    return prompt_addresses
+
+def to_summary_intention_prompt(recent_messages: list) -> str:
     prompt_user_summary_intention = f'''
         根据用户聊天历史，总结用户对旅行产品的需求，并判断用户的意图。
         结果放到 json 对象中，结构化返回。
@@ -211,15 +230,30 @@ def analyze_user_input(recent_messages: list, task_id: str):
 
         用户聊天历史记录为：{recent_messages}
     '''
+    return prompt_user_summary_intention
 
+def analyze_user_input(recent_messages: list, task_id: str):
+    prompt_addresses = to_addresses_prompt(recent_messages)
+    prompt_condition_dates = to_condition_dates_prompt(recent_messages)
+    prompt_condition_others = to_condition_others_prompt(recent_messages)
+    prompt_user_summary_intention = to_summary_intention_prompt(recent_messages)
+
+    messages_addresses = [{'role': 'user', 'content': prompt_addresses}]
     messages_condition_dates = [{'role': 'user', 'content': prompt_condition_dates}]
     messages_condition_others = [{'role': 'user', 'content': prompt_condition_others}]
     messages_user_summary_intention = [{'role': 'user', 'content': prompt_user_summary_intention}]
 
     with ThreadPoolExecutor(max_workers=4) as executor:
+        f1 = executor.submit(qwen_call, messages_addresses, 'json_object', task_id, 'addresses', config['model_user_addresses'])
         f2 = executor.submit(qwen_call, messages_condition_dates, 'json_object', task_id, 'condition_dates', config['model_user_condition_dates'])
         f3 = executor.submit(qwen_call, messages_condition_others, 'json_object', task_id, 'condition_others', config['model_user_condition_others'])
         f4 = executor.submit(qwen_call, messages_user_summary_intention, 'json_object', task_id, 'user_summary_intention', config['model_user_summary_intention'])
+
+    addresses = json.loads(f1.result())
+    if 'addresses' in addresses and len(addresses['addresses']) > 0:
+        c1, c2, c3 = geo.to_codes(addresses['addresses'])
+        if len(c1) > 0 or len(c2) > 0 or len(c3) > 0:
+            addresses['addr_codes_list'] = [c1, c2, c3]
 
     condition_dates = json.loads(f2.result())
     condition_others = json.loads(f3.result())
@@ -229,23 +263,10 @@ def analyze_user_input(recent_messages: list, task_id: str):
     if 'product_nums' not in user_summary_intention:
         user_summary_intention['product_nums'] = []
 
-    # qwen-plus 和 qwen-turbo 似乎都认为今年是 2023 年。临时解决方法：year += 2。注意 2024 是闰年。
-    # leap_date = datetime(year=2024, month=2, day=29)
-    # if condition['depart_date'] != '':
-    #     depart_date = datetime.strptime(condition['depart_date'], '%Y-%m-%d')
-    #     if depart_date.year < datetime.now().year:
-    #         delta = 365 + 366 if depart_date < leap_date else 365 * 2
-    #         condition['depart_date'] = (depart_date + timedelta(days=delta)).strftime('%Y-%m-%d')
-    #
-    # if condition['back_date'] != '':
-    #     back_date = datetime.strptime(condition['back_date'], '%Y-%m-%d')
-    #     if back_date.year < datetime.now().year:
-    #         delta = 365 + 366 if back_date < leap_date else 365 * 2
-    #         condition['back_date'] = (back_date + timedelta(days=delta)).strftime('%Y-%m-%d')
-
     if condition_others['tourists'] < 1:
         condition_others['tourists'] = 1 # 以防万一
-    return condition_dates | condition_others, user_summary_intention
+
+    return condition_dates | condition_others, user_summary_intention | addresses
 
 def to_match_prompt(recent_messages, feature: str) -> list:
         prompt = f'''
