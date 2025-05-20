@@ -19,6 +19,7 @@ from utils import geo
 client = OpenAI(
         api_key=decrypt(config['api_key']),
         base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
+        # timeout=1
     )
 
 def qwen_call(messages, return_type: str, task_id: str, job_name: str, model_name: str):
@@ -31,11 +32,10 @@ def qwen_call(messages, return_type: str, task_id: str, job_name: str, model_nam
             messages=messages,
             response_format={'type': return_type}
         )
-        log.info(f'{task_id} {model_name} {job_name} done, cost {datetime.now() - t0}')
-        log.info(f'{task_id} {model_name} {job_name} request_id: {completion.id}, usage: {completion.usage}')
+        log.info(f'{task_id} {model_name} {job_name} done, cost {datetime.now() - t0}, request_id: {completion.id}, usage: {completion.usage}')
         return completion.choices[0].message.content
     except APIError as e:
-        log.info(f'{task_id} {model_name} {job_name} APIError: {e.status_code}, {e.code}, {e.message}')
+        log.info(f'{task_id} {model_name} {job_name} APIError: {e}')
         return ''
     except Exception as e:  # 其他异常（如网络问题）
         log.info(f'{task_id} {model_name} {job_name} api Exception: {str(e)}')
@@ -194,8 +194,9 @@ def to_condition_others_prompt(recent_messages: list) -> str:
 def to_addresses_prompt(recent_messages: list) -> str:
     prompt_addresses = f'''
         #背景和需求#
-        从顾客与旅游行业客服人员的对话中，提取出顾客想去旅游的各地名，
+        从顾客与旅游行业客服人员的对话中，提取出顾客想去旅游的目的地各地名，
         包括：国家、省、城市、州、郡、县、道等。
+        不要包含出发地的地名。
         不允许编造内容。只提取顾客提到的地名。不要根据顾客的想法去找合适的地名。
 
         以下为这段对话，其中 user 为顾客，assistant 为客服人员。
@@ -292,7 +293,7 @@ def to_match_prompt(recent_messages, feature: str) -> list:
         return llm_messages
 
 
-def check_products_matched(recent_messages, full_features, task_id: str, model_name: str):
+def check_products_matched(recent_messages, full_features, task_id: str, model_name: str, flag: str):
     if len(full_features) == 0:
         return []
 
@@ -300,7 +301,7 @@ def check_products_matched(recent_messages, full_features, task_id: str, model_n
     with ThreadPoolExecutor(max_workers=len(full_features)) as executor:
         futures = {executor.submit(
             qwen_call, to_match_prompt(recent_messages, feature),
-            'json_object', task_id, f'{pn} if_matched', model_name
+            'json_object', task_id, f'{pn} {flag} if_matched', model_name
         ): pn for pn, feature in full_features.items()}
 
         for f in as_completed(futures):

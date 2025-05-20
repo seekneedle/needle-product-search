@@ -48,7 +48,7 @@ def product_nums_by_codes(level: str, codes: list, my_company_id: str) -> set:
     if len(codes) == 0:
         return set()
     codes_str = ','.join(codes)
-    page_size = 100
+    page_size = 50
     url = f'https://mapi.uuxlink.com/mcsp/productAi/page?{level}={codes_str}&companyId={my_company_id}&saleTerminal=1&size={page_size}&current=1'
     log.info(f'__by_addr url: {url}')
     try:
@@ -348,8 +348,8 @@ def get_product_feature(product_num: str, product_detail: dict):
 
 
 # 返回 dynamic feature 和 product_feature
-def get_full_feature(product_num: str, my_company_id: str, cond: dict, env: str):
-    # log.info(f'__get_full_feature: {product_num}, my_company_id:{my_company_id}')
+def get_full_feature(product_num: str, my_company_id: str, cond: dict, env: str, flag: str):
+    # log.info(f'__get_full_feature {flag} {product_num} begins')
     if env == 'uat':
         url = f'https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}'
     else:
@@ -357,35 +357,35 @@ def get_full_feature(product_num: str, my_company_id: str, cond: dict, env: str)
     try:
         data = requests.get(url).json()['data']
         if data is None:
-            log.info(f'__get_full_feature {product_num} json empty failed')
+            log.info(f'__get_full_feature {flag} {product_num} json empty failed')
             return {}, {}
         if not is_product_valid(my_company_id, data):
-            log.info(f'__get_full_feature {product_num} product invalid failed')
+            log.info(f'__get_full_feature {flag} {product_num} product invalid failed')
             return {}, {}
 
         df = get_dynamic_feature(product_num, data, cond)
         # log.info(f'___df:_{df}_')
         if len(df) == 0:
             return {}, {}
-        # product_feature_str = get_product_feature_new(product_num, data)
         pf = get_product_feature(product_num, data)
         # log.info(f'___pf:_{pf}_')
+        # log.info(f'__get_full_feature {flag} {product_num} done')
         return df, pf
     except Exception as e:
         trace_info = traceback.format_exc()
-        log.info(f'__get_full_feature {product_num} exception failed. e:{e}, trace:{trace_info}')
+        log.info(f'__get_full_feature {flag} {product_num} exception failed. e:{e}, trace:{trace_info}')
         return {}, {}
 
 # helper
-def batch_features(product_nums: set, my_company_id: str, cond: dict, env: str, func) -> dict:
+def batch_features(product_nums: set, my_company_id: str, cond: dict, env: str, flag: str, func) -> dict:
     dynas, prods = {}, {}
 
     #
     # todo 并发数量应该多少？
     #
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=15) as executor:
         # map<future, to_add_name_list>
-        futures = {executor.submit(func, pn, my_company_id, cond, env): pn for pn in product_nums}
+        futures = {executor.submit(func, pn, my_company_id, cond, env, flag): pn for pn in product_nums}
 
         for f in as_completed(futures):
             prod_num = futures[f]
@@ -400,9 +400,9 @@ def batch_features(product_nums: set, my_company_id: str, cond: dict, env: str, 
                 log.info(f'__exception: {info}')
     return dynas, prods
 
-def get_full_features(product_num_set: set, my_company_id: str, cond: dict, env: str):
-    log.info(f'__get_full_features: product_nums:{product_num_set}, my_company_id:{my_company_id}, condition:{cond}')
-    return batch_features(product_num_set, my_company_id, cond, env, get_full_feature)
+def get_full_features(product_num_set: set, my_company_id: str, cond: dict, env: str, flag: str):
+    log.info(f'__get_full_features {flag} product_nums:{len(product_num_set)}:{product_num_set}, my_company_id:{my_company_id}, condition:{cond}')
+    return batch_features(product_num_set, my_company_id, cond, env, flag, get_full_feature)
 
 
 
@@ -527,57 +527,29 @@ def cal_date_valid(product_num: str, cond_key: str, cal: dict, condition: dict) 
     return False
 
 
-
-
-
-
-
-def test_get_feature(product_nums: list):
-    import time
-    for p in product_nums:
-        url = f'https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={p}'
-        try:
-            data = requests.get(url).json()['data']
-            if data is None:
-                print(f"{p}")
-            else:
-                print(f"{p} {data['productTitle']}")
-                js = json.dumps(data, ensure_ascii=False, indent=4)
-                with open(f'georgia_desc_{p}.json', 'w') as f:
-                    f.write(js)
-        finally:
-            pass
-        time.sleep(0.2)
-
 if __name__ == '__main__':
     env = 'uat'
     # product_num_list = ['U178329', 'U173527', 'U176764', 'U175263', 'U178181', 'U170495']
-    product_num_list = {'U167154', 'U178795', 'U195697'}
-    my_company_id = ''
-    condition = {
-        'tourists': 1,
-        'days_min': 5,
-        'days_max': 15,
-        'price_min': 0,
-        'price_max': 30000,
-        'depart_date_min': '2025-05-01',
-        'depart_date_max': '2025-07-30',
-        'back_date_min': '2025-05-01',
-        'back_date_max': '2025-07-30',
-    }
-    dynas, prods = get_full_features(product_num_list, my_company_id, condition, env)
-    print(f'_dynas:{dynas}')
-    print(f'_prods:{prods}')
-    sys.exit(0)
+    # product_num_list = {'U170562', 'U166875', 'U166668'}
+    product_num_set = {'U166668', 'U179321', 'U166679', 'U179026', 'U184511', 'U171142', 'U179474', 'U168302', 'U173301', 'U167600', 'U170101', 'U166875', 'U180935', 'U200400', 'U166698'}
 
-    print(f'will visit Georgia')
-    user_input_summary = '格鲁吉亚'
-    rerank_top_k = 100
-    # r = search_product_kb(user_input_summary, rerank_top_k, env)
-    # product_num_list = list(set(r['product_nums']))
-    product_num_list = [
-        'U175582', 'U167152', 'U173345', 'U192427'
-    ]
-    print(f'{rerank_top_k} -> {len(product_num_list)}')
-    test_get_feature(product_num_list)
+    my_company_id = ''
+    # condition = {
+    #     'tourists': 1,
+    #     'days_min': 5,
+    #     'days_max': 15,
+    #     'price_min': 0,
+    #     'price_max': 30000,
+    #     'depart_date_min': '2025-05-01',
+    #     'depart_date_max': '2025-07-30',
+    #     'back_date_min': '2025-05-01',
+    #     'back_date_max': '2025-07-30',
+    # }
+    condition = {}
+    dynas, prods = get_full_features(product_num_set, my_company_id, condition, env, 'test')
+    for p in prods:
+        with open(f'prod_feature_{p}.json', 'w') as f:
+            f.write(prods[p])
+    # print(f'_dynas:{dynas}')
+    # print(f'_prods:{prods}')
     sys.exit(0)

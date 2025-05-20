@@ -83,19 +83,19 @@ def retrieve_products_by_addr(task_id: str, max_num: int, my_company_id: str, re
 
     t0 = datetime.now()
     pn_result_set = set()
-    # step 1. 从 page 召回 products，只用其 product_nums 列表
-    product_num_set = coze.product_nums_by_addresses(codes_list, my_company_id)
-    # step 2. 从 kb 取 product full features，并滤掉状态不正常的，并做 dynamic filtering
-    dyna_res, prod_res = coze.get_full_features(product_num_set, my_company_id, condition, 'uat')
+    # step 1. 从 page 召回 products，只用其 product_nums 列表，只取前 24 个
+    product_num_set = set(list(coze.product_nums_by_addresses(codes_list, my_company_id))[:24])
+    # step 2. 从 db 取 product full features，并滤掉状态不正常的，并做 dynamic filtering
+    dyna_res, prod_res = coze.get_full_features(product_num_set, my_company_id, condition, 'uat', 'by_addr')
     pn_filtered_list = list(dyna_res.keys())
     total_len = len(pn_filtered_list)
     log.info(f'__product count:{total_len}')
 
-    interval = 5
+    batch_size = 8
     model_name = config['model_product_matched']
-    for i in range(0, total_len, interval):
-        prods = {p : prod_res[p] for p in pn_filtered_list[i:i + interval]}
-        pn_matched_list = llm.check_products_matched(recent_messages, prods, task_id, model_name)
+    for i in range(0, total_len, batch_size):
+        prods = {p : prod_res[p] for p in pn_filtered_list[i:i + batch_size]}
+        pn_matched_list = llm.check_products_matched(recent_messages, prods, task_id, model_name, 'by_addr')
         pn_result_set.update(pn_matched_list)
         if len(pn_result_set) > 2:
             break
@@ -116,7 +116,7 @@ def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, rece
     dyna_res_0, prod_res_0 = {}, {}
     product_nums_bad = set() # 曾经被过滤掉的 product_num 们
     found = False
-    while retries < 3:
+    while retries < 1:
         t1 = datetime.now()
         # step 1. 从 kb 召回 products，只用其 product_nums 列表
         product_nums_0 = coze.search_product_kb(user_input_summary, rerank_top_k, env)
@@ -126,18 +126,18 @@ def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, rece
         # 去掉曾经被过滤掉的
         product_nums_1 = product_nums_0 - product_nums_bad
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_bad: {product_nums_1}')
-        # step 2. 从 kb 取 product full features，并滤掉状态不正常的，并做 dynamic filtering
-        dyna_res, prod_res = coze.get_full_features(product_nums_1, my_company_id, condition, env)
+        # step 2. 从 db 取 product full features，并滤掉状态不正常的，并做 dynamic filtering
+        dyna_res, prod_res = coze.get_full_features(product_nums_1, my_company_id, condition, env, 'by_llm')
         dyna_res_0.update(dyna_res)
         prod_res_0.update(prod_res) # 把 dynamic filtering 的幸存者保存起来
 
         if len(dyna_res) > 0:
-            product_nums_2 = dyna_res.keys()
-            log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_dynamic: {product_nums_2}')
+            product_nums_2 = list(dyna_res.keys())
+            log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_dynamic:{len(product_nums_2)}:{product_nums_2}')
             # step 5. filter by llm.check_products_matched
             t5 = datetime.now()
             model_name = config['model_product_matched']
-            product_nums_3 = llm.check_products_matched(recent_messages, prod_res, task_id, model_name)
+            product_nums_3 = llm.check_products_matched(recent_messages, prod_res, task_id, model_name, 'by_llm')
             log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} {model_name} filter_llm_matched costs {datetime.now() - t5}')
             log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} {model_name} after filter_llm_matched: {product_nums_3}')
 
@@ -174,7 +174,7 @@ def retrieve_products_db(task_id: str, product_nums: list):
     env = config['env']
     t0 = datetime.now()
     # 调用时 my_company_id 和 condition 都为空，以达到「不过滤」的效果
-    dyna_res, prod_res = coze.get_full_features(set(product_nums), '', {}, env)
+    dyna_res, prod_res = coze.get_full_features(set(product_nums), '', {}, env, 'by_user_preferred')
     log.info(f'/get_task_id {task_id} db.get_dynamic_features costs {datetime.now() - t0}')
     return product_nums, prod_res, dyna_res
 
@@ -393,7 +393,7 @@ async def get_summary(task_id: str):
         cnt += 1
         if cnt == 1:
             t1 = datetime.now()
-            log.info(f'/get_summary_result {task_id} {model_name} first chunk arrived. costs first {t1 - t0}, wait+first {t1 - start_time}')
+            log.info(f'/get_summary_result {task_id} api request {model_name} first chunk arrived. costs first {t1 - t0}, wait+first {t1 - start_time}')
         # log.info(f'/get_summary_result chunk {cnt-1} _{item.strip()}_')
         yield item
     t2 = datetime.now()
@@ -436,12 +436,11 @@ async def get_products(task_id: str):
     model_name = config['model_content']
     res_contents = llm.get_product_contents(recent_messages, prod_infos, task_id, model_name)
     log.info(f'/get_products_result {task_id} {model_name} llm.get_contents costs {datetime.now() - t0}')
-    log.info(f'/get_products_result {task_id} {model_name} llm.get_contents result {res_contents}')
-    # log.info(f'_______________ res_contents from llm {model_name}, before sorting _{res_contents}')
+    log.info(f'/get_products_result {task_id} {model_name} llm.get_contents result before sorting {res_contents}')
     # res_contents 中每一项有三个字段：content, score, product_num
     products_sorted = sorted(res_contents, key=lambda p: -p['score'])
-    log.info(f'/get_products_result {task_id} get_contents costs {datetime.now() - t0}')
-    log.info(f'/get_products_result {task_id} get_contents result {products_sorted}')
+    # log.info(f'/get_products_result {task_id} get_contents costs {datetime.now() - t0}')
+    # log.info(f'/get_products_result {task_id} get_contents result {products_sorted}')
 
     return ProductsResponse(products=products_sorted)
 
