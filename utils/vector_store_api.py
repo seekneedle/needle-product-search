@@ -8,6 +8,7 @@ from utils.log import log
 # data: 形如 {'file_names': ['U167478', 'U167490']}
 
 def post_call(api: str, data: dict):
+    orig_data = data
     needle_url = config['needle_url']
     url = f'{needle_url}/vector_store{api}'
     log.info(f'vector_store_api post {url} data={data}')
@@ -26,11 +27,16 @@ def post_call(api: str, data: dict):
     #     'file_names': product_nums
     # }
     response = requests.post(url, headers=headers, json=data)
+    log.info(f'______vector_store_api post {url} data={data}, response:{response.json()}')
     if response is None:
         return []
-    return response.json()['data']
-    # 调用者再从返回对象中取出感兴趣的字段
-
+    j = response.json()
+    if 'data' in j:
+        return j['data']
+        # 调用者再从返回对象中取出感兴趣的字段
+    else:
+        log.info(f'__post_call() return no data: api:{api}, param:{data}, param_orig:{orig_data}')
+        return []
 
 def file_add(files):
     needle_url = config['needle_url']
