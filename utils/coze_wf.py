@@ -57,6 +57,7 @@ def coze_workflow_sync(wf_id, params):
 
 
 
+# obsoleted
 def get_product_feature(product_num: str) -> str:
     log.info(f'coze_wf.get_product_feature: product_num:{product_num}')
     wf_id_name = 'coze_product_feature_wf_id'
@@ -90,10 +91,6 @@ async def get_questions(messages) -> dict:
 
 
 if __name__ == '__main__':
-    product_num = 'U166879'
-    res = get_product_feature(product_num)
-    log.info(f'____{type(res)} __ {res}____')
-
     messages = [
         {
             "role": "user",

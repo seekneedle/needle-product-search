@@ -43,6 +43,7 @@ model_user_condition_dates: 'qwen-plus'
 model_user_condition_others: 'qwen-plus'
 model_user_summary_intention: 'qwen-plus'
 model_product_matched: 'qwen-plus'
+model_update: 'qwen-turbo'
 
 kb_id: icmp3tfyk6
 # uux_url: mapi.uuxlink.com

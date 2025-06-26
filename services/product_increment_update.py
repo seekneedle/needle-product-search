@@ -9,7 +9,7 @@ from typing import List
 from utils.config import config
 from utils.security import decrypt
 from utils.log import log
-from utils import coze, coze_wf, vector_store_api
+from utils import coze, update_helper, vector_store_api
 from server.response import RequestError
 import requests
 
@@ -36,7 +36,7 @@ def process_add_batch(product_nums):
 
     files = []
     with ThreadPoolExecutor(max_workers=len(product_nums)) as executor:
-        futures = {executor.submit(coze_wf.get_product_feature,pn): pn for pn in product_nums}
+        futures = {executor.submit(update_helper.get_product_feature_for_update_incr, pn): pn for pn in product_nums}
         for f in as_completed(futures):
             product_num = futures[f]
             try:
