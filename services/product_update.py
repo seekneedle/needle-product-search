@@ -5,7 +5,7 @@ import json
 from utils.config import config
 from utils.security import decrypt
 from utils.log import log
-from utils import coze_wf
+from utils import update_helper
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import traceback
 from server.response import RequestError
@@ -61,32 +61,6 @@ def get_page_product_nums(current):
                 product_nums.append(record['productNum'])
     return product_nums
 
-def get_product_feature(product_num):
-    url = config['coze_api_url']
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': decrypt(config['coze_api_auth'])
-    }
-    data = {
-        "workflow_id": config['coze_product_feature_wf_id'],
-        "parameters": {
-            "product_num": product_num,
-            "env": config['env']
-        }
-    }
-    response = requests.post(url, headers=headers, json=data)
-    product_detail = ''
-    if response.status_code == 200:
-        response_data = response.json()
-        input_data = response_data["data"]
-        try:
-            parsed_data = json.loads(input_data)
-            product_detail = parsed_data['product_feature']
-        except json.JSONDecodeError:
-            raise RequestError(response.status_code, f"解析失败: {response.status_code}, 响应内容: {response.text}")
-    return product_detail
-
-
 def process_page(current):
     id = config['kb_id']
 
@@ -102,8 +76,7 @@ def process_page(current):
         retries = 0
         while retries < 3:
             try:
-                # todo use coze_wf.get_product_feature() instead
-                product_feature = get_product_feature(product_num)
+                product_feature = update_helper.get_product_feature_for_update(product_num)
                 if product_feature is None or product_feature == '':
                     raise RuntimeError('detail empty')
                 file_content = product_feature

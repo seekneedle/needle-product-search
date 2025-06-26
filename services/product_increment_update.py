@@ -22,21 +22,13 @@ class ProductUpdateIncrRequest(BaseModel):
 class ProductUpdateIncrResponse(BaseModel):
     results: List[str]
 
-#
-# get_product_feature() 调用 coze wf，除了静态特征，还调了一个大模型生成「以下是为您总结的该旅行产品特点」
-# 为与「全量更新」保持一致，保留此 wf 调用，暂不迁移到 coze.get_product_feature()
-#### begin of 暂不迁移
-# product_feature = coze.get_product_feature(product_num, 'prod')
-# file_content = product_feature['product_feature']
-#### end of 暂不迁移
-#
 def process_add_batch(product_nums):
     log.info(f'/incr_update add_batch {product_nums} begins')
     t00 = datetime.now()
 
     files = []
     with ThreadPoolExecutor(max_workers=len(product_nums)) as executor:
-        futures = {executor.submit(update_helper.get_product_feature_for_update_incr, pn): pn for pn in product_nums}
+        futures = {executor.submit(update_helper.get_product_feature_for_update, pn): pn for pn in product_nums}
         for f in as_completed(futures):
             product_num = futures[f]
             try:

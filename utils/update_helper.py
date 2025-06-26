@@ -206,7 +206,7 @@ def to_prompt(product_feature: str) -> str:
 
 from utils.config import config
 from utils import llm
-def get_product_feature_for_update_incr(product_num: str) -> str:
+def get_product_feature_for_update(product_num: str) -> str:
     # print(f'________env: {config["env"]}')
     product_feature = get_product_feature_0(config['env'], product_num)
     # print(f'________product_feature: type:{type(product_feature)}, content:{product_feature}')
@@ -236,7 +236,7 @@ if __name__ == '__main__':
         t0 = datetime.now()
         res_old = coze_wf.get_product_feature(product_num)
         t1 = datetime.now()
-        res_new = get_product_feature_for_update_incr(product_num)
+        res_new = get_product_feature_for_update(product_num)
         t2 = datetime.now()
         with open(f'update.{product_num}.txt', 'w') as f:
             f.write(f'________old________\n{res_old}\n\n')
