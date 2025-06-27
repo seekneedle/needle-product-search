@@ -1,6 +1,5 @@
 import sys, pathlib
-sys.path.append(str(pathlib.Path(__file__).parent.parent)) # 将项目根目录添加到 Python 路径
-############# 以上两行在单独测试本文件时加上
+sys.path.append(str(pathlib.Path(__file__).parent.parent))
 
 import multiprocessing
 import asyncio
@@ -32,8 +31,9 @@ def qwen_call(messages, return_type: str, task_id: str, job_name: str, model_nam
             messages=messages,
             response_format={'type': return_type}
         )
-        log.info(f'{task_id} {model_name} {job_name} done, cost {datetime.now() - t0}, request_id: {completion.id}, usage: {completion.usage}')
-        return completion.choices[0].message.content
+        rsp = completion.choices[0].message.content
+        log.info(f'{task_id} {model_name} {job_name} done, cost {datetime.now() - t0}, request_id: {completion.id}, usage: {completion.usage}, raw result:_{rsp}_')
+        return rsp
     except APIError as e:
         log.info(f'{task_id} {model_name} {job_name} APIError: {e}')
         return ''
@@ -194,10 +194,10 @@ def to_condition_others_prompt(recent_messages: list) -> str:
 def to_addresses_prompt(recent_messages: list) -> str:
     prompt_addresses = f'''
         #背景和需求#
-        从顾客与旅游行业客服人员的对话中，提取出顾客想去旅游的目的地各地名，
+        从顾客与旅游行业客服人员的对话中，解析出顾客想去旅游的目的地各地名，
         包括：国家、省、城市、州、郡、县、道等。
+        注意，如果有比国家更高一级的地名，类似“北欧”、“波罗的海国家”、“巴尔干国家”、“东南亚”这样的，必须转换成国家。
         不要包含出发地的地名。
-        不允许编造内容。只提取顾客提到的地名。不要根据顾客的想法去找合适的地名。
 
         以下为这段对话，其中 user 为顾客，assistant 为客服人员。
 
@@ -223,11 +223,13 @@ def to_summary_intention_prompt(recent_messages: list) -> str:
         输出文字要平实，不要带文学色彩。要简短，不要啰嗦。
 
         关于用户的意图：
-        如果用户感觉以前系统推荐的产品不太合适、或者不够多，希望再推荐些其他产品，返回 intention = 1。
-        如果用户表示出对某个或某几个产品的肯定，或进一步询问已推荐的一个或几个产品的详细信息（如出发日期、价格、特点等），
-        或想对比几个已推荐产品的某些特点，返回 intention = 2，并将用户指定的各产品编号（注意是以字母 U 打头的，不要漏了这个字母）放入 product_nums 列表中。
-        如果是其他意图，返回 intention = 0。
-        并将理由放在 reason 中。
+        1. 如果用户感觉以前系统推荐的产品不太合适、或者不够多，希望再推荐些其他产品，返回 intention = 1。
+        2. 如果用户表示出对某个或某几个产品的肯定，或进一步询问已推荐的一个或几个产品的详细信息（如出发日期、价格、特点等），
+        或想对比几个已推荐产品的某些特点，返回 intention = 2，并将用户指定的各产品编号放入 product_nums 列表中。
+        注意，产品编号的格式是：以字母 U 打头，后跟六位数字。从用户需求中提取产品编号时，要严格根据这个格式判断。
+        将产品编号放入 product_nums 列表中时，不要忘了字母 U。
+        3. 如果是其他意图，返回 intention = 0。
+        4. 不管什么意图，都将识别的理由放在 reason 中。
 
         用户聊天历史记录为：{recent_messages}
     '''
@@ -250,22 +252,38 @@ def analyze_user_input(recent_messages: list, task_id: str):
         f3 = executor.submit(qwen_call, messages_condition_others, 'json_object', task_id, 'condition_others', config['model_user_condition_others'])
         f4 = executor.submit(qwen_call, messages_user_summary_intention, 'json_object', task_id, 'user_summary_intention', config['model_user_summary_intention'])
 
-    addresses = json.loads(f1.result())
+    try:
+        addresses = json.loads(f1.result())
+    except Exception as e:
+        log.info(f'{type(e).__name__} at analyze_user_input.parse_addrs: {e}, task_id:{task_id}.')
+        addresses = {}
     if 'addresses' in addresses and len(addresses['addresses']) > 0:
         c1, c2, c3 = geo.to_codes(addresses['addresses'])
         if len(c1) > 0 or len(c2) > 0 or len(c3) > 0:
             addresses['addr_codes_list'] = [c1, c2, c3]
 
-    condition_dates = json.loads(f2.result())
-    condition_others = json.loads(f3.result())
-    user_summary_intention = json.loads(f4.result())
+    try:
+        condition_dates = json.loads(f2.result())
+    except Exception as e:
+        log.info(f'{type(e).__name__} at analyze_user_input.parse_dates: {e}, task_id:{task_id}.')
+        condition_dates = {}
 
+    try:
+        condition_others = json.loads(f3.result())
+    except Exception as e:
+        log.info(f'{type(e).__name__} at analyze_user_input.parse_condition_others: {e}, task_id:{task_id}.')
+        condition_others = {}
+    if 'tourists' not in condition_others or condition_others['tourists'] < 1:
+        condition_others['tourists'] = 1 # 以防万一
+
+    try:
+        user_summary_intention = json.loads(f4.result())
+    except Exception as e:
+        log.info(f'{type(e).__name__} at analyze_user_input.parse_user_summary_intention: {e}, task_id:{task_id}.')
+        user_summary_intention = {}
     # 意图识别时，如果没正面提到某些产品，可能没有 product_nums 字段。补一个，以防不测。
     if 'product_nums' not in user_summary_intention:
         user_summary_intention['product_nums'] = []
-
-    if condition_others['tourists'] < 1:
-        condition_others['tourists'] = 1 # 以防万一
 
     return condition_dates | condition_others, user_summary_intention | addresses
 
@@ -315,9 +333,7 @@ def check_products_matched(recent_messages, full_features, task_id: str, model_n
                 if res['matched']:
                     matched_product_nums.append(futures[f])
             except Exception as e:
-                trace_info = traceback.format_exc()
-                info = f'Exception for batch_features, e:{e}, prod_num:{prod_name}, trace: {trace_info}'
-                print(f'__exception: {info}')
+                log.info(f'{type(e).__name__}: {e}, prod_num:{prod_name}.')
     return matched_product_nums
 
 def to_content_prompt(recent_messages, feature: str) -> list:
@@ -362,9 +378,7 @@ def get_product_contents(recent_messages, prod_infos, task_id: str, model_name: 
                 log.info(f'{task_id} {model_name} {product_num} content:{res}')
                 res_contents.append(res)
             except Exception as e:
-                trace_info = traceback.format_exc()
-                info = f'Exception for batch_features, e:{e}, prod_num:{product_num}, trace: {trace_info}'
-                print(f'__exception: {info}')
+                log.info(f'{type(e).__name__}: {e}, prod_num:{product_num}.')
 
     # 给没有 score 的产品手工增加 score
     num_contents = len(res_contents)
@@ -378,4 +392,7 @@ def get_product_contents(recent_messages, prod_infos, task_id: str, model_name: 
     return res_contents
 
 if __name__ == '__main__':
-    pass
+    messages = [{'role': 'user', 'content': '中亚五国旅游，帮我找一个。'}]
+    task_id = 'mock_task_id'
+    o = analyze_user_input(messages, task_id)
+    print(o)
