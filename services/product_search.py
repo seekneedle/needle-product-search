@@ -24,6 +24,7 @@ from utils.retrieve import retrieve
 from utils import coze, llm
 
 class ProductSearchRequest(BaseModel):
+    taskId: Optional[str] = None
     maxNum: Optional[int] = 5
     companyId: Optional[str] = ''
     messages: List[object]
@@ -272,7 +273,8 @@ def retrieve_products_bg(task_id: str, request):
 
 def get_task_id(request: ProductSearchRequest):
     log.info(f'get_task_id(): request:{request}')
-    task_id = str(uuid.uuid4())
+    task_id =  request.taskId if request.taskId and request.taskId != '' else str(uuid.uuid4())
+    log.info(f'get_task_id(): task_id:{task_id}')
     threading.Thread(target=retrieve_products_bg, args=(task_id, request)).start() # 启动后台线程
     return task_id
 
