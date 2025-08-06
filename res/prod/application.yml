@@ -45,7 +45,6 @@ model_user_summary_intention: 'qwen-plus'
 model_product_matched: 'qwen-plus'
 
 kb_id: icmp3tfyk6
-# uux_url: mapi.uuxlink.com
 uux_url: mapi.uuxlink.com
 needle_url: http://8.152.213.191:8475
 

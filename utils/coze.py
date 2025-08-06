@@ -10,6 +10,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.log import log
+from utils.config import config
 
 def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
     env = 'uat' # 暂时 hard code
@@ -44,24 +45,36 @@ def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
         log.info(f'__exception: {info}')
     return product_num_set
 
-def product_nums_by_codes(level: str, codes: list, my_company_id: str) -> set:
+def is_channel_id_valid_paged(my_channel_id: str, r: dict) -> bool:
+    # pf 来自 /productAi/page 接口调用结果，查看其 applyChannels 字段
+    if my_channel_id is None or my_channel_id == '':
+        return True
+    if 'applyChannels' not in r or r['applyChannels'] is None or len(r['applyChannels']) == 0:
+        return True
+    return my_channel_id in r['applyChannels']
+
+def product_nums_by_codes(level: str, codes: list, my_company_id: str, my_channel_id: str) -> set:
     if len(codes) == 0:
         return set()
     codes_str = ','.join(codes)
     page_size = 50
-    url = f'https://mapi.uuxlink.com/mcsp/productAi/page?{level}={codes_str}&companyId={my_company_id}&saleTerminal=1&size={page_size}&current=1'
+    uux_url = config['uux_url']
+    url = f'https://{uux_url}/mcsp/productAi/page?{level}={codes_str}&companyId={my_company_id}&saleTerminal=1&size={page_size}&current=1'
     log.info(f'__by_addr url: {url}')
     try:
         records = requests.get(url).json()['data']['records']
-        # 返回的产品都是合法的，不用过滤
-        return set(r['productNum'] for r in records)
+        #### 返回的产品需过滤 channelId；其他字段都是合法的，不用过滤
+        # for r in records:
+        #     valid_2 = is_channel_id_valid_paged(my_channel_id, r)
+        #     log.info(f'__my_channel:{my_channel_id}, r.apply_channels:{r["applyChannels"] if "applyChannels" in r else "None"}, valid:{valid_2}')
+        return set(r['productNum'] for r in records if is_channel_id_valid_paged(my_channel_id, r))
     except Exception as e:
         trace_info = traceback.format_exc()
         log.info(f'__get_features_by_codes {level} exception failed. e:{e}, trace:{trace_info}')
         return set()
 
-def product_nums_by_addresses(addr_codes_list: list, my_company_id: str):
-    log.info(f'by addresses: {addr_codes_list}, my_company:{my_company_id}')
+def product_nums_by_addresses(addr_codes_list: list, my_company_id: str, my_channel_id: str):
+    log.info(f'by addresses: {addr_codes_list}, my_company:{my_company_id}, my_channel:{my_channel_id}')
     if len(addr_codes_list) == 0:
         return {}, {}
     levels = {
@@ -72,7 +85,7 @@ def product_nums_by_addresses(addr_codes_list: list, my_company_id: str):
     product_nums = set()
     for level, codes in levels.items():
         if len(codes) != 0:
-            res = product_nums_by_codes(level, codes, my_company_id)
+            res = product_nums_by_codes(level, codes, my_company_id, my_channel_id)
             # log.info(f'__{level}:{codes}: {res}')
             if len(res) != 0:
                 product_nums.update(res)
@@ -166,16 +179,24 @@ def get_feature_desc(product_detail, intro, parent_key, keys=None) -> str:
 8、审核状态是审核通过的产品（auditStatus=2）;
 '''
 
-# 以下两个函数仅用于 log 目的
-def pf_field_desc(pf: dict, k: str):
+#### 以下两个函数仅用于 log 目的
+def pf_field_desc(pf: dict, k: str) -> str:
     return f'{k}:{pf[k]}' if k in pf else f'{k}:_not_present_'
 
-def product_company_to_str(pf: dict):
+def pf_field_channels(pf: dict) -> str:
+    if 'channels' not in pf:
+        return '_not_present_'
+    if pf['channels'] is None:
+        return '_None_'
+    return ','.join([c['channelId'] for c in pf['channels']])
+
+def product_company_to_str(pf: dict) -> str:
+    channels_str = 'channels:' + pf_field_channels(pf)
     return ', '.join([pf_field_desc(pf, k) for k in [
         'productMode', 'proxyCompanyId', 'supplierInternalFlag', 'supplierCompanyId',
         'openState', 'contractStatus', 'supplierStatus', 'auditStatus',
-    ]])
-# 以上两个函数仅用于 log 目的
+    ]]) + ', ' + channels_str
+#### 以上两个函数仅用于 log 目的
 
 # 参数
 # my_company_id: 我的分公司id，前端传来
@@ -199,10 +220,19 @@ def is_product_company_valid(my_company_id: str, pf: dict) -> bool:
     else: # case 3: 连内部分公司都不是，纯外部
         return True
 
-def is_product_valid(my_company_id: str, pf: dict) -> bool:
+def is_channel_id_valid(my_channel_id: str, pf: dict) -> bool:
+    # pf 来自 /productAi/productInfo 接口调用结果，查看其 channels 字段
+    if my_channel_id is None or my_channel_id == '':
+        return True
+    if 'channels' not in pf or pf['channels'] is None or len(pf['channels']) == 0:
+        return True
+    return my_channel_id in [c['channelId'] for c in pf['channels']]
+
+def is_product_valid(my_company_id: str, my_channel_id: str, pf: dict) -> bool:
     # log.info(f'__is_product_valid: {product_company_to_str(pf)}')
     return (
-        is_product_company_valid(my_company_id, pf) # 3,4
+        is_channel_id_valid(my_channel_id, pf) # channel id 支持
+        and is_product_company_valid(my_company_id, pf) # 3,4
         and pf['openState'] == 1  # 要求 5、售卖状态是启售的产品（openState=1）
         and pf['contractStatus'] == 1   # 6、产品管理合同有效的产品（contractStatus=1）
         and pf['supplierStatus'] == 1 # 7、产品所属供应商有效的产品（supplierStatus=1
@@ -348,21 +378,19 @@ def get_product_feature(product_num: str, product_detail: dict):
 
 
 # 返回 dynamic feature 和 product_feature
-def get_full_feature(product_num: str, my_company_id: str, cond: dict, env: str, flag: str):
-    # log.info(f'__get_full_feature {flag} {product_num} begins')
-    if env == 'uat':
-        url = f'https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}'
-    else:
-        url = f'https://mapi.uuxlink.com/mcsp/productAi/productInfo?productNum={product_num}'
+def get_full_feature(product_num: str, my_company_id: str, my_channel_id: str, cond: dict, env: str, flag: str):
+    # log.info(f'__get_full_feature {flag} {product_num} my_company:{my_company_id}, my_channel:{my_channel_id} begins')
+    uux_url = config['uux_url']
+    url = f'https://{uux_url}/mcsp/productAi/productInfo?productNum={product_num}'
+    # log.info(f'___url:{url}')
     try:
         data = requests.get(url).json()['data']
         if data is None:
             log.info(f'__get_full_feature {flag} {product_num} json empty failed')
             return {}, {}
-        if not is_product_valid(my_company_id, data):
+        if not is_product_valid(my_company_id, my_channel_id, data):
             log.info(f'__get_full_feature {flag} {product_num} product invalid failed')
             return {}, {}
-
         df = get_dynamic_feature(product_num, data, cond)
         # log.info(f'___df:_{df}_')
         if len(df) == 0:
@@ -377,7 +405,7 @@ def get_full_feature(product_num: str, my_company_id: str, cond: dict, env: str,
         return {}, {}
 
 # helper
-def batch_features(product_nums: set, my_company_id: str, cond: dict, env: str, flag: str, func) -> dict:
+def batch_features(product_nums: set, my_company_id: str, my_channel_id: str, cond: dict, env: str, flag: str, func) -> dict:
     dynas, prods = {}, {}
 
     #
@@ -385,7 +413,7 @@ def batch_features(product_nums: set, my_company_id: str, cond: dict, env: str, 
     #
     with ThreadPoolExecutor(max_workers=15) as executor:
         # map<future, to_add_name_list>
-        futures = {executor.submit(func, pn, my_company_id, cond, env, flag): pn for pn in product_nums}
+        futures = {executor.submit(func, pn, my_company_id, my_channel_id, cond, env, flag): pn for pn in product_nums}
 
         for f in as_completed(futures):
             prod_num = futures[f]
@@ -400,9 +428,9 @@ def batch_features(product_nums: set, my_company_id: str, cond: dict, env: str, 
                 log.info(f'__exception: {info}')
     return dynas, prods
 
-def get_full_features(product_num_set: set, my_company_id: str, cond: dict, env: str, flag: str):
-    log.info(f'__get_full_features {flag} product_nums:{len(product_num_set)}:{product_num_set}, my_company_id:{my_company_id}, condition:{cond}')
-    return batch_features(product_num_set, my_company_id, cond, env, flag, get_full_feature)
+def get_full_features(product_num_set: set, my_company_id: str, my_channel_id: str, cond: dict, env: str, flag: str):
+    log.info(f'__get_full_features {flag} product_nums:{len(product_num_set)}:{product_num_set}, my_company_id:{my_company_id}, my_channel_id:{my_channel_id}, condition:{cond}')
+    return batch_features(product_num_set, my_company_id, my_channel_id, cond, env, flag, get_full_feature)
 
 
 
@@ -542,6 +570,8 @@ if __name__ == '__main__':
     }
 
     my_company_id = ''
+    my_channel_id = '693e0e5fd0e350179ececfad9d645498'
+
     # condition = {
     #     'tourists': 1,
     #     'days_min': 5,
@@ -554,7 +584,15 @@ if __name__ == '__main__':
     #     'back_date_max': '2025-07-30',
     # }
     condition = {}
-    dynas, prods = get_full_features(product_num_set, my_company_id, condition, env, 'test')
+
+    addr_codes_list = [['FRA', 'ITA', 'CHE'], [], []]
+    pset = product_nums_by_addresses(addr_codes_list, my_company_id, my_channel_id)
+    log.info(str(pset))
+    sys.exit(0)
+
+    product_num_set = {'U168233', 'U168230', 'U168229', 'U168231'}
+
+    dynas, prods = get_full_features(product_num_set, my_company_id, my_channel_id, condition, env, 'test')
     for p in prods:
         with open(f'prod_feature_{p}.json', 'w') as f:
             f.write(prods[p])

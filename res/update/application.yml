@@ -46,7 +46,6 @@ model_product_matched: 'qwen-plus'
 model_update: 'qwen-turbo'
 
 kb_id: icmp3tfyk6
-# uux_url: mapi.uuxlink.com
 uux_url: mapi.uuxlink.com
 needle_url: http://8.152.213.191:8475
 

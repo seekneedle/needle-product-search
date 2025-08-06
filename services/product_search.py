@@ -27,6 +27,7 @@ class ProductSearchRequest(BaseModel):
     taskId: Optional[str] = None
     maxNum: Optional[int] = 5
     companyId: Optional[str] = ''
+    channelId: Optional[str] = ''
     messages: List[object]
     class Config:
         arbitrary_types_allowed = True
@@ -78,16 +79,16 @@ def product_search(request: ProductSearchRequest):
 
 
 # 按地址精确检索：从 page/es 召回，去 db 取 feature 并过滤
-def retrieve_products_by_addr(task_id: str, max_num: int, my_company_id: str, recent_messages, condition: dict, codes_list: list):
+def retrieve_products_by_addr(task_id: str, max_num: int, my_company_id: str, my_channel_id: str, recent_messages, condition: dict, codes_list: list):
     if len(codes_list) == 0:
         return [], {}, {}, FLAG_NONE
 
     t0 = datetime.now()
     pn_result_set = set()
     # step 1. 从 page 召回 products，只用其 product_nums 列表，只取前 24 个
-    product_num_set = set(list(coze.product_nums_by_addresses(codes_list, my_company_id))[:24])
+    product_num_set = set(list(coze.product_nums_by_addresses(codes_list, my_company_id, my_channel_id))[:24])
     # step 2. 从 db 取 product full features，并滤掉状态不正常的，并做 dynamic filtering
-    dyna_res, prod_res = coze.get_full_features(product_num_set, my_company_id, condition, 'uat', 'by_addr')
+    dyna_res, prod_res = coze.get_full_features(product_num_set, my_company_id, my_channel_id, condition, 'uat', 'by_addr')
     pn_filtered_list = list(dyna_res.keys())
     total_len = len(pn_filtered_list)
     log.info(f'__product count:{total_len}')
@@ -109,7 +110,7 @@ def retrieve_products_by_addr(task_id: str, max_num: int, my_company_id: str, re
     return pn_result_list, prod_result, dyna_result, flag
 
 # 正常流程：从 kb 召回，去 db 取 feature 并过滤
-def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, recent_messages, condition: dict, user_input_summary: str):
+def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, my_channel_id: str, recent_messages, condition: dict, user_input_summary: str):
     env = config['env']
     rerank_top_k = max_num * 8
     retries = 0
@@ -128,7 +129,7 @@ def retrieve_products_kb_db(task_id: str, max_num: int, my_company_id: str, rece
         product_nums_1 = product_nums_0 - product_nums_bad
         log.info(f'/get_task_id {task_id} retrieve_products_kb_db retry:{retries} after filter_bad: {product_nums_1}')
         # step 2. 从 db 取 product full features，并滤掉状态不正常的，并做 dynamic filtering
-        dyna_res, prod_res = coze.get_full_features(product_nums_1, my_company_id, condition, env, 'by_llm')
+        dyna_res, prod_res = coze.get_full_features(product_nums_1, my_company_id, my_channel_id, condition, env, 'by_llm')
         dyna_res_0.update(dyna_res)
         prod_res_0.update(prod_res) # 把 dynamic filtering 的幸存者保存起来
 
@@ -174,8 +175,8 @@ def retrieve_products_db(task_id: str, product_nums: list):
         return [], []
     env = config['env']
     t0 = datetime.now()
-    # 调用时 my_company_id 和 condition 都为空，以达到「不过滤」的效果
-    dyna_res, prod_res = coze.get_full_features(set(product_nums), '', {}, env, 'by_user_preferred')
+    # 调用时 my_company_id、my_channel_id 和 condition 都为空，以达到「不过滤」的效果
+    dyna_res, prod_res = coze.get_full_features(set(product_nums), '', '', {}, env, 'by_user_preferred')
     log.info(f'/get_task_id {task_id} db.get_dynamic_features costs {datetime.now() - t0}')
     return product_nums, prod_res, dyna_res
 
@@ -203,16 +204,16 @@ def retrieve_products_bg(task_id: str, request):
         codes_key = 'addr_codes_list'
         if codes_key not in user_summary_intention:
             log.info(f'__ by llm only __')
-            product_nums, prod_res, dyna_res, flag = retrieve_products_kb_db(task_id, request.maxNum, request.companyId, recent_messages, condition, user_input_summary)
+            product_nums, prod_res, dyna_res, flag = retrieve_products_kb_db(task_id, request.maxNum, request.companyId, request.channelId, recent_messages, condition, user_input_summary)
             log.info(f'__llm only: {product_nums}')
         else:
             log.info('__ by llm and by addr __')
             with ThreadPoolExecutor(max_workers=2) as executor:
                 f1 = executor.submit(retrieve_products_kb_db, task_id, request.maxNum,
-                                     request.companyId, recent_messages, condition,
+                                     request.companyId, request.channelId, recent_messages, condition,
                                      user_input_summary)
                 f2 = executor.submit(retrieve_products_by_addr, task_id, request.maxNum,
-                                     request.companyId, recent_messages, condition,
+                                     request.companyId, request.channelId, recent_messages, condition,
                                      user_summary_intention[codes_key])
             pn1, pf1, df1, flag1 = f1.result()
             pn2, pf2, df2, flag2 = f2.result()
