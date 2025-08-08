@@ -18,7 +18,7 @@ username = 'needle_product_search'
 password = 'u^rk*uLxmQ7yBMJc'
 url0 = 'http://localhost:8409'
 
-# url0 = 'http://8.152.213.191:8409'
+# url0 = 'http://172.16.0.181:8409'
 
 
 

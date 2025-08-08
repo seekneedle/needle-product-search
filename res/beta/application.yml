@@ -46,7 +46,7 @@ model_product_matched: 'qwen-plus'
 
 kb_id: icmp3tfyk6
 uux_url: mapi.uuxlink.com
-needle_url: http://8.152.213.191:8475
+needle_url: http://172.16.0.181:8475
 
 filestore_root_dir: output
 

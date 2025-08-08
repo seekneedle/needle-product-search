@@ -15,10 +15,10 @@ from utils.config import config
 def search_product_kb(user_input_summary: str, rerank_top_k: int, env: str):
     env = 'uat' # 暂时 hard code
     if env == 'prod':
-        url = 'http://8.152.213.191:8471/vector_store/retrieve'
+        url = 'http://172.16.0.181:8471/vector_store/retrieve'
         id = 'icmp3tfyk6'
     else:
-        url = 'http://8.152.213.191:8475/vector_store/retrieve'
+        url = 'http://172.16.0.181:8475/vector_store/retrieve'
         id = 'icmp3tfyk6'
     auth = 'Basic bmVlZGxlOm5lZWRsZQ=='
 
