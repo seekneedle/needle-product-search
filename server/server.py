@@ -24,4 +24,4 @@ def start_server():
     ip = config['ip']
     port = config['port']
     cpu_count = os.cpu_count() * 2
-    uvicorn.run("server.server:app", host=ip, port=port, workers=cpu_count)
+    uvicorn.run("server.server:app", host=ip, port=port)
